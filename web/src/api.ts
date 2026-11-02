@@ -20,6 +20,41 @@ export class ApiError extends Error {
   }
 }
 
+async function failure(res: Response): Promise<ApiError> {
+  let code = `http_${res.status}`;
+  let message = `请求失败（${res.status}）`;
+  try {
+    const body = await res.json();
+    if (body?.error) {
+      code = body.error.code ?? code;
+      message = body.error.message ?? message;
+    }
+  } catch {
+    /* non-JSON error body: keep the generic message */
+  }
+  return new ApiError(code, message);
+}
+
+/** Read a preview/audio URL's error message (the <audio> element can't see response bodies). */
+export async function audioError(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url, { headers: { Range: "bytes=0-1" } });
+    if (res.ok) {
+      res.body?.cancel().catch(() => {});
+      return null;
+    }
+    return (await failure(res)).message;
+  } catch {
+    return null;
+  }
+}
+
+export type SearchEvent =
+  | { type: "start"; track_id: number; providers: { id: string; label: string }[] }
+  | { type: "progress"; provider: string; label: string; ok: boolean; error: string | null; candidates: Candidate[] }
+  | { type: "done"; track: Track; candidates: Candidate[] }
+  | { type: "error"; message: string };
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
@@ -27,20 +62,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } catch {
     throw new ApiError("offline", "连不上本地服务，请确认 songseek serve 正在运行");
   }
-  if (!res.ok) {
-    let code = `http_${res.status}`;
-    let message = `请求失败（${res.status}）`;
-    try {
-      const body = await res.json();
-      if (body?.error) {
-        code = body.error.code ?? code;
-        message = body.error.message ?? message;
-      }
-    } catch {
-      /* non-JSON error body: keep the generic message */
-    }
-    throw new ApiError(code, message);
-  }
+  if (!res.ok) throw await failure(res);
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
@@ -86,6 +108,37 @@ export const api = {
   audioUrl: (id: number) => `/api/tracks/${id}/audio`,
   reveal: (id: number) => request<{ ok: true }>(`/tracks/${id}/reveal`, json("POST")),
 
+  /** Streams per-provider results as NDJSON. Throws ApiError("http_404") on servers without streaming. */
+  async searchStream(query: string, duration: number | undefined, onEvent: (event: SearchEvent) => void, signal?: AbortSignal) {
+    let res: Response;
+    try {
+      res = await fetch("/api/search/stream", { ...json("POST", { query, duration }), signal });
+    } catch (error) {
+      if ((error as Error).name === "AbortError") throw error;
+      throw new ApiError("offline", "连不上本地服务，请确认 songseek serve 正在运行");
+    }
+    if (res.status === 404 || res.status === 405) throw new ApiError("no_stream", "服务端不支持流式搜索");
+    if (!res.ok || !res.body) throw await failure(res);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const flush = (final: boolean) => {
+      let index: number;
+      while ((index = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, index).trim();
+        buffer = buffer.slice(index + 1);
+        if (line) onEvent(JSON.parse(line) as SearchEvent);
+      }
+      if (final && buffer.trim()) onEvent(JSON.parse(buffer) as SearchEvent);
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      flush(false);
+    }
+    flush(true);
+  },
   searchOne: (query: string, duration?: number) =>
     request<{ track: Track; candidates: Candidate[] }>("/search", json("POST", { query, duration })),
   searchPlaylist: (id: number, trackIds?: number[]) => request<Job>(`/playlists/${id}/search`, json("POST", { track_ids: trackIds })),

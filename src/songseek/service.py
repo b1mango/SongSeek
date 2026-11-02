@@ -3,6 +3,7 @@ import io
 import json
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -11,7 +12,7 @@ from pathlib import Path
 from .config import Config
 from .db import Database
 from .downloader import Downloader, PreviewCache
-from .errors import SongSeekError, log_failure
+from .errors import SongSeekError, log_failure, public_error
 from .events import Broadcaster
 from .importers import parse_file, parse_text
 from .matching import evaluate, evaluate_candidates, same_recording, sort_candidates
@@ -185,7 +186,26 @@ class Service:
         except Exception as error:
             return [], [f"{provider_id}：{log_failure(provider_id, error)}"]
 
-    def search_track(self, track_id: int, query: str | None = None, providers: list[str] | None = None, *, in_job: bool = False, infer_query: bool = False) -> dict:
+    def _rank_search(self, track: Track, found: dict) -> list[Candidate]:
+        raws = dict(found)
+        for candidate in self.candidates(track.id):
+            raw = self.raw_candidate(candidate.id)
+            raws.setdefault((raw.provider, raw.source_id), raw)
+        ranked = sort_candidates(evaluate_candidates(track, list(raws.values()), {p.id: p.label for p in self.config.providers}, netease_cookie_set=self.config.settings.netease_cookie_set), {p.id: p.order for p in self.config.providers})
+        with self.db.transaction() as connection:
+            for candidate in ranked:
+                raw = raws[(candidate.provider, candidate.source_id)]
+                existing = connection.execute("SELECT id FROM candidates WHERE track_id=? AND provider=? AND source_id=?", (track.id, candidate.provider, candidate.source_id)).fetchone()
+                if existing:
+                    candidate.id = existing["id"]
+                    connection.execute("UPDATE candidates SET raw=? WHERE id=?", (json.dumps(asdict(raw), ensure_ascii=False), candidate.id))
+                else:
+                    candidate.id = self.db.insert("candidates", candidate.model_dump(), track_id=track.id, provider=candidate.provider, source_id=candidate.source_id, raw=json.dumps(asdict(raw), ensure_ascii=False))
+                candidate.preview_url = f"/api/candidates/{candidate.id}/preview"
+                self.db.save("candidates", candidate.model_dump())
+        return ranked
+
+    def search_track(self, track_id: int, query: str | None = None, providers: list[str] | None = None, *, in_job: bool = False, infer_query: bool = False, on_event: Callable[[dict], None] | None = None) -> dict:
         with self.lock(track_id):
             track = self.track(track_id)
             if not in_job:
@@ -197,69 +217,84 @@ class Service:
                 enabled = list(dict.fromkeys(providers))
             track.status, track.error = "searching", None
             self.save_track(track)
-            first_query = query or f"{track.title} {track.artist}".strip()
-            deadline = time.monotonic() + SEARCH_TIMEOUT
-            futures = {self.provider_pool.submit(self._search_provider, p, first_query, deadline): p for p in enabled}
-            fallback = set()
-            found, errors = {}, []
-            infos = {p.id: p for p in self.config.providers}
-            while futures and time.monotonic() < deadline:
-                completed, _ = wait(futures, timeout=max(0, deadline - time.monotonic()), return_when=FIRST_COMPLETED)
-                for future in completed:
-                    provider_id = futures.pop(future)
-                    raw_candidates, failures = future.result()
-                    errors.extend(failures)
-                    for raw in raw_candidates:
-                        found[(raw.provider, raw.source_id)] = raw
-                    usable = [evaluate(track, raw, infos[provider_id].label) for raw in raw_candidates]
-                    if (not infer_query and not failures and provider_id not in fallback and first_query != track.title
-                            and not any(c.verdict != "reject" and c.checks[1].ok is not False for c in usable)):
-                        fallback.add(provider_id)
-                        futures[self.provider_pool.submit(self._search_provider, provider_id, track.title, deadline)] = provider_id
-            for future in futures:
-                future.cancel()
-                errors.append(f"{futures[future]}：搜索超时")
-            if infer_query:
-                ordered = sorted(found.values(), key=lambda raw: infos[raw.provider].order)
-                track.title, track.artist = parse_query(query, ordered)
-                track.flags = version_flags(track.title)
-            for candidate in self.candidates(track_id):
-                raw = self.raw_candidate(candidate.id)
-                found.setdefault((raw.provider, raw.source_id), raw)
-            ranked = sort_candidates(evaluate_candidates(track, list(found.values()), {p.id: p.label for p in self.config.providers}), {p.id: p.order for p in self.config.providers})
-            with self.db.transaction() as connection:
-                for candidate in ranked:
-                    raw = found[(candidate.provider, candidate.source_id)]
-                    existing = connection.execute("SELECT id FROM candidates WHERE track_id=? AND provider=? AND source_id=?", (track_id, candidate.provider, candidate.source_id)).fetchone()
-                    if existing:
-                        candidate.id = existing["id"]
-                        connection.execute("UPDATE candidates SET raw=? WHERE id=?", (json.dumps(asdict(raw), ensure_ascii=False), candidate.id))
-                    else:
-                        candidate.id = self.db.insert("candidates", candidate.model_dump(), track_id=track_id, provider=candidate.provider, source_id=candidate.source_id, raw=json.dumps(asdict(raw), ensure_ascii=False))
-                    candidate.preview_url = f"/api/candidates/{candidate.id}/preview"
-                    self.db.save("candidates", candidate.model_dump())
-                track.candidate_count = len(ranked)
-                track.best_score = ranked[0].score if ranked else None
-                track.error = "；".join(dict.fromkeys(errors))[:300] or None
-                available = [c for c in ranked if c.verdict != "reject"]
-                if track.chosen_by == "user" and track.chosen_candidate_id in {c.id for c in ranked}:
-                    track.status = "matched"
-                elif available and available[0].verdict == "match" and self.config.settings.auto_approve:
-                    track.status, track.chosen_candidate_id, track.chosen_by = "matched", available[0].id, "auto"
-                else:
-                    track.status = "needs_review" if available else "not_found"
-                    track.chosen_candidate_id = track.chosen_by = None
-                self.save_track(track)
-            return {"track": track, "candidates": ranked}
+            futures = {}
+            try:
+                infos = {p.id: p for p in self.config.providers}
+                if on_event:
+                    on_event({"type": "start", "track_id": track_id,
+                              "providers": [{"id": p, "label": infos[p].label} for p in enabled]})
+                first_query = query or f"{track.title} {track.artist}".strip()
+                deadline = time.monotonic() + SEARCH_TIMEOUT
+                futures = {self.provider_pool.submit(self._search_provider, p, first_query, deadline): p for p in enabled}
+                fallback = set()
+                found, errors = {}, []
 
-    def search_one(self, query: str, duration: float | None = None) -> dict:
+                def rank():
+                    if infer_query:
+                        ordered = sorted(found.values(), key=lambda raw: infos[raw.provider].order)
+                        track.title, track.artist = parse_query(query, ordered)
+                        track.flags = version_flags(track.title)
+                    return self._rank_search(track, found)
+
+                def progress(provider_id, error):
+                    if not on_event:
+                        return  # batch jobs only need the final ranking
+                    ranked = rank()
+                    if on_event:
+                        on_event({"type": "progress", "provider": provider_id, "label": infos[provider_id].label,
+                                  "ok": error is None, "error": error,
+                                  "candidates": [c.model_dump() for c in ranked]})
+
+                while futures and time.monotonic() < deadline:
+                    completed, _ = wait(futures, timeout=max(0, deadline - time.monotonic()), return_when=FIRST_COMPLETED)
+                    for future in completed:
+                        provider_id = futures.pop(future)
+                        raw_candidates, failures = future.result()
+                        errors.extend(failures)
+                        for raw in raw_candidates:
+                            found[(raw.provider, raw.source_id)] = raw
+                        progress(provider_id, failures[0].removeprefix(f"{provider_id}：") if failures else None)
+                        usable = [evaluate(track, raw, infos[provider_id].label, netease_cookie_set=self.config.settings.netease_cookie_set) for raw in raw_candidates]
+                        if (not infer_query and not failures and provider_id not in fallback and first_query != track.title
+                                and not any(c.verdict != "reject" and c.checks[1].ok is not False for c in usable)):
+                            fallback.add(provider_id)
+                            futures[self.provider_pool.submit(self._search_provider, provider_id, track.title, deadline)] = provider_id
+                for future in futures:
+                    future.cancel()
+                    errors.append(f"{futures[future]}：搜索超时")
+                    progress(futures[future], "搜索超时")
+                ranked = rank()
+                with self.db.transaction():
+                    track.candidate_count = len(ranked)
+                    track.best_score = ranked[0].score if ranked else None
+                    track.error = "；".join(dict.fromkeys(errors))[:300] or None
+                    available = [c for c in ranked if c.verdict != "reject"]
+                    if track.chosen_by == "user" and track.chosen_candidate_id in {c.id for c in ranked}:
+                        track.status = "matched"
+                    elif available and available[0].verdict == "match" and self.config.settings.auto_approve:
+                        track.status, track.chosen_candidate_id, track.chosen_by = "matched", available[0].id, "auto"
+                    else:
+                        track.status = "needs_review" if available else "not_found"
+                        track.chosen_candidate_id = track.chosen_by = None
+                    self.save_track(track)
+                if on_event:
+                    on_event({"type": "done", "track": track.model_dump(), "candidates": [c.model_dump() for c in ranked]})
+                return {"track": track, "candidates": ranked}
+            except Exception as error:
+                for future in futures:
+                    future.cancel()
+                track.status, track.error = "failed", public_error(error)
+                self.save_track(track)
+                raise
+
+    def search_one(self, query: str, duration: float | None = None, *, on_event: Callable[[dict], None] | None = None) -> dict:
         title, artist = parse_query(query.strip())
         existing = next((p for p in self.playlists() if p.source == "search" and p.name == "单曲搜索"), None)
         playlist = existing or self.create_playlist("单曲搜索", "search", [])
         with self.db.transaction():
             tracks = self.tracks(playlist.id)
             track = self._add_track(playlist.id, ParsedRow(title=title, artist=artist, duration=duration), max((t.position for t in tracks), default=0) + 1)
-        return self.search_track(track.id, query=query.strip(), infer_query=True)
+        return self.search_track(track.id, query=query.strip(), infer_query=True, on_event=on_event)
 
     def download_track(self, track_id: int, *, in_job: bool = False) -> Track:
         with self.lock(track_id):
@@ -272,7 +307,8 @@ class Service:
             self.save_track(track)
             candidates = self.candidates(track_id)
             chosen = self.candidate(track.chosen_candidate_id)
-            choices = [chosen] + [c for c in candidates if c.id != chosen.id and (c.verdict == "match" or same_recording(track, chosen, c))]
+            choices = [chosen] + sorted((c for c in candidates if c.id != chosen.id and (c.verdict == "match" or same_recording(track, chosen, c))),
+                                        key=lambda c: c.needs_member)
             errors = []
             for candidate in choices:
                 try:

@@ -4,19 +4,24 @@ import queue
 import subprocess
 import sys
 import time
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote, urlsplit
+
+import anyio
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import Field, SecretStr
+from starlette.background import BackgroundTask
+from starlette.concurrency import iterate_in_threadpool
 from starlette.exceptions import HTTPException
 
 from .config import Config
 from .errors import SongSeekError, logger, public_error
+from .matching import same_recording
 from .models import Model, ParsedRow, Source
 from .service import Service
 
@@ -237,6 +242,40 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
             raise SongSeekError("请输入搜索词", "invalid_query")
         return current().search_one(body.query, body.duration)
 
+    @app.post("/api/search/stream")
+    async def search_one_stream(body: SearchOne):
+        if not body.query.strip():
+            raise SongSeekError("请输入搜索词", "invalid_query")
+        service = current()
+
+        async def stream():
+            events = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+
+            def emit(event):
+                loop.call_soon_threadsafe(events.put_nowait, event)
+
+            def search():
+                try:
+                    service.search_one(body.query, body.duration, on_event=emit)
+                except Exception as error:
+                    emit({"type": "error", "message": public_error(error)})
+
+            async def work():
+                # 断连仍让线程完成搜索；任务组等待它退出后才释放请求生命周期。
+                await anyio.to_thread.run_sync(search)
+
+            async with anyio.create_task_group() as tasks:
+                tasks.start_soon(work)
+                while True:
+                    event = await events.get()
+                    yield json.dumps(event, ensure_ascii=False) + "\n"
+                    if event["type"] in ("done", "error"):
+                        break
+
+        return StreamingResponse(stream(), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
     @app.post("/api/playlists/{identifier}/search")
     def search_playlist(identifier: int, body: TrackIds = TrackIds()):
         return current().jobs.start("search", identifier, body.track_ids)
@@ -253,51 +292,73 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
     def cancel_job(identifier: int):
         return current().jobs.cancel(identifier)
 
-    @app.get("/api/candidates/{identifier}/preview")
-    def preview(identifier: int, request: Request):
-        raw = current().raw_candidate(identifier)
-        provider = current().providers[raw.provider]
+    def open_preview(candidate, request: Request, fallback: bool):
+        service = current()
+        raw = service.raw_candidate(candidate.id)
+        provider = service.providers[raw.provider]
+        headers = {"X-Preview-Source": quote(candidate.provider_label, safe="")}
+        if fallback:
+            headers["X-Preview-Fallback"] = "1"
+        source = provider.resolve(raw)
+        if source.local_path or raw.provider in ("bilibili", "youtube"):
+            path = Path(source.local_path) if source.local_path else service.previews.get(raw, source, provider)
+            with path.open("rb"):
+                stat = path.stat()
+            return FileResponse(path, stat_result=stat, headers=headers)
+
+        resources = ExitStack()
         try:
-            source = provider.resolve(raw)
-            if source.local_path:
-                return FileResponse(source.local_path)
-            if raw.provider in ("bilibili", "youtube"):
-                return FileResponse(current().previews.get(raw, source, provider))
-            provider.semaphore.acquire()
-            client = provider.client(timeout=30)
-            headers = provider.headers() | source.headers
+            resources.enter_context(provider.semaphore)
+            client = resources.enter_context(provider.client(timeout=30))
+            upstream_headers = provider.headers() | source.headers
             if request.headers.get("range"):
-                headers["Range"] = request.headers["range"]
-            response = client.send(client.build_request("GET", source.url, headers=headers), stream=True)
+                upstream_headers["Range"] = request.headers["range"]
+            response = client.send(client.build_request("GET", source.url, headers=upstream_headers), stream=True)
+            resources.callback(response.close)
             if response.status_code == 416:
-                content_range = response.headers.get("content-range", "bytes */0")
-                response.close()
-                client.close()
-                provider.semaphore.release()
-                return Response(status_code=416, headers={"Content-Range": content_range})
+                headers["Content-Range"] = response.headers.get("content-range", "bytes */0")
+                resources.close()
+                return Response(status_code=416, headers=headers)
             response.raise_for_status()
             if response.headers.get("content-encoding", "identity") != "identity":
                 raise SongSeekError("音源未提供可直接转发的音频流", "invalid_audio")
             if "text/" in response.headers.get("content-type", "") or "json" in response.headers.get("content-type", ""):
                 raise SongSeekError("试听地址返回了非音频内容", "invalid_audio")
-        except Exception as error:
-            if "client" in locals():
-                client.close()
-                provider.semaphore.release()
-            raise SongSeekError(public_error(error), "preview_failed", 502) from None
+        except Exception:
+            resources.close()
+            raise
 
-        def chunks():
+        async def chunks():
             try:
-                yield from response.iter_raw()
+                async for chunk in iterate_in_threadpool(response.iter_raw()):
+                    yield chunk
             except Exception as error:
                 logger.warning("试听流中断：%s", public_error(error))
             finally:
-                response.close()
-                client.close()
-                provider.semaphore.release()
+                resources.close()
 
-        exposed = {key: response.headers[key] for key in ("content-length", "content-range", "accept-ranges", "content-type") if key in response.headers}
-        return StreamingResponse(chunks(), status_code=response.status_code, headers=exposed, media_type=response.headers.get("content-type", "audio/mpeg"))
+        headers.update({key: response.headers[key] for key in ("content-length", "content-range", "accept-ranges", "content-type") if key in response.headers})
+        return StreamingResponse(chunks(), status_code=response.status_code, headers=headers,
+                                 media_type=response.headers.get("content-type", "audio/mpeg"),
+                                 background=BackgroundTask(resources.close))
+
+    @app.get("/api/candidates/{identifier}/preview")
+    def preview(identifier: int, request: Request):
+        service = current()
+        chosen = service.candidate(identifier)
+        track = service.track(chosen.track_id)
+        orders = {p.id: p.order for p in service.config.providers}
+        alternatives = sorted((c for c in service.candidates(track.id)
+                               if c.id != chosen.id and not c.needs_member and same_recording(track, chosen, c)),
+                              key=lambda c: (c.provider == chosen.provider, orders.get(c.provider, 999), c.rank))
+        errors = []
+        for candidate in [chosen] + alternatives[:3]:
+            try:
+                return open_preview(candidate, request, candidate.id != chosen.id)
+            except Exception as error:
+                errors.append(f"{candidate.provider_label}：{public_error(error)}")
+        suffix = "已尝试的同版本候选均无法试听" if alternatives else "其他音源没有同一版本可试听"
+        raise SongSeekError("；".join(dict.fromkeys(errors + [suffix])), "preview_failed", 502)
 
     @app.get("/api/events")
     async def events(request: Request):

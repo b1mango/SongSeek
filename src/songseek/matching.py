@@ -4,7 +4,7 @@ from .models import Candidate, CheckItem, Quality, RawCandidate, Track
 from .normalize import FLAG_LABELS, artists_match, title_key, tolerance, version_flags
 
 
-def evaluate(track: Track, raw: RawCandidate, label: str, *, duration_confirmed: bool = False) -> Candidate:
+def evaluate(track: Track, raw: RawCandidate, label: str, *, duration_confirmed: bool = False, netease_cookie_set: bool = False) -> Candidate:
     expected, actual = title_key(track.title), title_key(raw.title)
     similarity = ratio(expected, actual) if expected and actual else 0
     title_ok = similarity >= 90
@@ -47,11 +47,12 @@ def evaluate(track: Track, raw: RawCandidate, label: str, *, duration_confirmed:
                      duration=raw.duration, quality=Quality(format=raw.format, bitrate=raw.bitrate,
                      label=f"{raw.bitrate}k" if raw.bitrate else "无损" if raw.format == "flac" else "未知音质"),
                      popularity=raw.popularity, score=round(score, 3), verdict=verdict, checks=checks,
-                     flags=flags, preview_url="", web_url=raw.web_url, rank=0)
+                     flags=flags, preview_url="", web_url=raw.web_url, rank=0,
+                     needs_member=raw.provider == "netease" and raw.extra.get("fee") in (1, 4) and not netease_cookie_set)
 
 
-def evaluate_candidates(track: Track, raws: list[RawCandidate], labels: dict[str, str]) -> list[Candidate]:
-    candidates = [evaluate(track, raw, labels[raw.provider]) for raw in raws]
+def evaluate_candidates(track: Track, raws: list[RawCandidate], labels: dict[str, str], *, netease_cookie_set: bool = False) -> list[Candidate]:
+    candidates = [evaluate(track, raw, labels[raw.provider], netease_cookie_set=netease_cookie_set) for raw in raws]
     if track.duration is None:
         eligible = [c for c in candidates if c.duration is not None and all(c.checks[i].ok is True for i in (0, 1, 3))]
         for i, candidate in enumerate(candidates):
@@ -59,7 +60,7 @@ def evaluate_candidates(track: Track, raws: list[RawCandidate], labels: dict[str
                     other.provider != candidate.provider and title_key(other.title) == title_key(candidate.title)
                     and abs(other.duration - candidate.duration) <= tolerance(min(other.duration, candidate.duration))
                     for other in eligible):
-                candidates[i] = evaluate(track, raws[i], labels[candidate.provider], duration_confirmed=True)
+                candidates[i] = evaluate(track, raws[i], labels[candidate.provider], duration_confirmed=True, netease_cookie_set=netease_cookie_set)
     return candidates
 
 
@@ -76,6 +77,7 @@ def sort_candidates(candidates: list[Candidate], orders: dict[str, int]) -> list
         {"match": 0, "review": 1, "reject": 2}[c.verdict],
         -c.score if c.verdict != "match" else 0,
         c.duration is None if c.verdict == "review" else False,
+        c.needs_member,
         -(10000 if c.quality.format in ("flac", "wav", "alac") else c.quality.bitrate or 0),
         -(c.popularity or 0), orders[c.provider], -c.score, c.source_id,
     ))

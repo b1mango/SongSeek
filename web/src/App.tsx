@@ -35,7 +35,9 @@ function Shell() {
     <div className="shell">
       <Sidebar route={route} />
       <main className="main">
-        <Page route={route} />
+        <div className="page-enter" key={route.page === "playlist" || route.page === "review" ? `${route.page}:${route.id}` : route.page}>
+          <Page route={route} />
+        </div>
       </main>
     </div>
   );

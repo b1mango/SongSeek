@@ -177,3 +177,22 @@ def test_video_noise_keeps_real_versions(noise):
     from songseek.normalize import title_key
     assert title_key("晴天 " + noise) == title_key("晴天")
     assert evaluate(track(), candidate(title="晴天 Live " + noise), "演示").verdict == "reject"
+
+
+def test_member_flag_survives_duration_consensus():
+    raws = [candidate(provider="netease", extra={"fee": 4}), candidate(provider="other", extra={"fee": 1})]
+    labels = {"netease": "网易云", "other": "其他"}
+    results = evaluate_candidates(track(duration=None), raws, labels)
+    assert [c.needs_member for c in results] == [True, False]
+    assert all(c.verdict == "match" for c in results)
+    authenticated = evaluate_candidates(track(duration=None), raws, labels, netease_cookie_set=True)
+    assert all(not c.needs_member for c in authenticated)
+    assert [c.score for c in results] == [c.score for c in authenticated]
+
+
+def test_member_only_ranks_after_playable_equivalent():
+    t = track(title="白鸽", artist="伍佰", duration=366)
+    member = candidate(provider="netease", source_id="1", title="白鸽", artist="伍佰", duration=366, bitrate=320, popularity=1, extra={"fee": 1})
+    free = candidate(provider="vkeys_qq", source_id="2", title="白鸽", artist="伍佰", duration=366, bitrate=320)
+    ranked = sort_candidates([evaluate(t, member, "网易云"), evaluate(t, free, "QQ")], {"netease": 0, "vkeys_qq": 1})
+    assert [c.provider for c in ranked] == ["vkeys_qq", "netease"] and ranked[1].needs_member

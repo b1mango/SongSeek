@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pause, Play, X, LoaderCircle } from "lucide-react";
+import { audioError } from "./api";
 import { fmtDuration } from "./format";
 
 export interface Playable {
@@ -34,6 +35,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [time, setTime] = useState(0);
   const [length, setLength] = useState(0);
+  const current = useRef<string | null>(null);
 
   if (!audio.current && typeof Audio !== "undefined") audio.current = new Audio();
 
@@ -50,9 +52,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     on("timeupdate", () => setTime(a.currentTime));
     on("durationchange", () => setLength(isFinite(a.duration) ? a.duration : 0));
     on("error", () => {
-      setLoading(false);
+      const url = a.currentSrc || a.src;
+      if (!url || !current.current) return;
+      const key = current.current;
+      setLoading(true);
       setPlaying(false);
-      setError("无法播放：音源拒绝了试听请求或链接已失效");
+      setError("试听失败，正在查原因…");
+      audioError(url).then((message) => {
+        if (current.current !== key) return;
+        setLoading(false);
+        setError(message ? `无法试听：${message}` : "无法试听：音源返回的音频无法播放，换一个候选试试");
+      });
     });
     return () => a.pause();
   }, []);
@@ -69,6 +79,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setTime(0);
       setLength(0);
       setItem(p);
+      current.current = p.key;
       a.src = p.url;
       a.play().catch(() => {});
     },
@@ -77,6 +88,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const stop = useCallback(() => {
     const a = audio.current!;
+    current.current = null;
     a.pause();
     a.removeAttribute("src");
     a.load();
@@ -90,13 +102,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     <Ctx.Provider value={value}>
       {children}
       {item && (
-        <div className="player" role="region" aria-label="播放器">
+        <div className={`player${error ? " has-error" : ""}`} role="region" aria-label="播放器">
           <button className="icon-btn player-toggle" onClick={() => toggle(item)} aria-label={playing ? "暂停" : "播放"}>
             {loading ? <LoaderCircle className="spin" size={18} /> : playing ? <Pause size={18} /> : <Play size={18} />}
           </button>
           <div className="player-meta">
             <div className="player-title">{item.title}</div>
-            <div className="player-sub">{error ?? item.subtitle}</div>
+            <div className="player-sub" title={error ?? item.subtitle}>
+              {error ?? item.subtitle}
+            </div>
           </div>
           <span className="mono player-time">{fmtDuration(time)}</span>
           <input

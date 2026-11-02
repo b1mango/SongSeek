@@ -80,6 +80,7 @@ export interface Candidate {
   preview_url: string;
   web_url: string | null;
   rank: number;
+  needs_member?: boolean;
 }
 
 export interface Job {

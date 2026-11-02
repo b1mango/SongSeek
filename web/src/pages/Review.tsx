@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleCheck,
+  Crown,
   ExternalLink,
   Keyboard,
   ListChecks,
@@ -18,6 +19,7 @@ import {
 import { api } from "../api";
 import { CheckChips, DurationRuler, Flags, StatusBadge, problemsOf, toneOfScore, useToast } from "../components";
 import { fmtDelta, fmtDuration, tolerance } from "../format";
+import { useFlipList } from "../motion";
 import { PlayButton } from "../player";
 import { href } from "../router";
 import { onEvent, upsertPlaylist, useStore } from "../store";
@@ -299,9 +301,11 @@ function Focus({
   const [searching, setSearching] = useState(false);
   const [editing, setEditing] = useState(false);
   const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({});
+  const body = useRef<HTMLTableSectionElement | null>(null);
 
   const viable = candidates?.filter((c) => c.verdict !== "reject") ?? [];
   const rejected = candidates?.filter((c) => c.verdict === "reject") ?? [];
+  useFlipList(body, (candidates ?? []).map((c) => c.id).join(",") + (showRejected ? "+r" : ""), t.id);
   const best = viable[0] ?? null;
   const chosen = candidates?.find((c) => c.id === t.chosen_candidate_id) ?? null;
 
@@ -398,7 +402,7 @@ function Focus({
                 <th aria-label="选择" />
               </tr>
             </thead>
-            <tbody>
+            <tbody ref={body}>
               {viable.map((c) => (
                 <CandRow key={c.id} c={c} t={t} chosen={c.id === t.chosen_candidate_id} hl={hl === c.id} rowRef={(el) => (rowRefs.current[c.id] = el)} onChoose={onChoose} onHover={setHl} />
               ))}
@@ -539,12 +543,12 @@ function CandRow({
   const delta = c.duration != null && t.duration != null ? c.duration - t.duration : null;
   const deltaTone = delta == null ? "idle" : Math.abs(delta) <= tolerance(t.duration!) ? "ok" : Math.abs(delta) <= 10 ? "warn" : "bad";
   return (
-    <tr ref={rowRef} className={`cand v-${c.verdict}${chosen ? " is-chosen" : ""}${hl ? " is-hl" : ""}`} onMouseEnter={() => onHover(c.id)} onMouseLeave={() => onHover(null)}>
+    <tr ref={rowRef} data-flip={c.id} className={`cand v-${c.verdict}${chosen ? " is-chosen" : ""}${hl ? " is-hl" : ""}`} onMouseEnter={() => onHover(c.id)} onMouseLeave={() => onHover(null)}>
       <td className="num">
         <span className={`rank v-${c.verdict}`}>{c.rank}</span>
       </td>
       <td>
-        <PlayButton playable={{ key: `c:${c.id}`, url: c.preview_url, title: c.title, subtitle: `${c.artist} · ${c.provider_label} 试听` }} />
+        <PlayButton playable={{ key: `c:${c.id}`, url: c.preview_url, title: c.title, subtitle: c.needs_member ? `${c.provider_label}需会员 · 已换其他音源同版本试听` : `${c.artist} · ${c.provider_label} 试听` }} />
       </td>
       <td>
         <div className="song">
@@ -559,7 +563,14 @@ function CandRow({
       </td>
       <td>
         <div className="src">
-          <span>{c.provider_label}</span>
+          <span>
+            {c.provider_label}
+            {c.needs_member && (
+              <span className="member-tag" title="这个音源需要会员才能播放；试听和下载会自动改用其他音源的同一版本">
+                <Crown size={11} aria-hidden /> 会员
+              </span>
+            )}
+          </span>
           <span className="mono small muted">
             {c.quality.label}
             {c.web_url && (

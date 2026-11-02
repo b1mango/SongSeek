@@ -117,6 +117,7 @@ class Candidate(Model):
     checks: list[CheckItem]
     flags: list[VersionFlag]
     preview_url: str
+    needs_member: bool = False
     web_url: str | None
     rank: int
 

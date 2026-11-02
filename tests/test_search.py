@@ -110,3 +110,58 @@ def test_deadline_retains_first_results_and_other_providers(service, monkeypatch
         assert result["track"].error == "slow：搜索超时"
     finally:
         release.set()
+
+
+def test_incremental_title_fallback_keeps_ids_and_lock(service, monkeypatch):
+    playlist = service.create_playlist("测试", "text", [ParsedRow(title="晴天", artist="周杰伦", duration=180)])
+    track_id = service.tracks(playlist.id)[0].id
+    calls, events = [], []
+
+    def search(query, limit):
+        calls.append(query)
+        return [RawCandidate("mock", "same", "其他" if len(calls) == 1 else "晴天", "周杰伦", duration=180)]
+
+    def emit(event):
+        events.append(event)
+        if event["type"] == "progress":
+            candidate = event["candidates"][0]
+            assert service.candidate(candidate["id"]).model_dump() == candidate
+            assert candidate["preview_url"] == f"/api/candidates/{candidate['id']}/preview"
+            errors = []
+            def mutate():
+                try:
+                    service.update_track(track_id, {"note": "忙碌"})
+                except SongSeekError as error:
+                    errors.append(error.code)
+            thread = threading.Thread(target=mutate)
+            thread.start()
+            thread.join()
+            assert errors == ["track_busy"]
+
+    monkeypatch.setattr(service.providers["mock"], "search", search)
+    result = service.search_track(track_id, on_event=emit)
+    assert calls == ["晴天 周杰伦", "晴天"]
+    assert [e["type"] for e in events] == ["start", "progress", "progress", "done"]
+    assert events[1]["candidates"][0]["id"] == events[2]["candidates"][0]["id"]
+    assert result["track"].status == "matched"
+    assert events[-1] == {"type": "done", "track": result["track"].model_dump(),
+                          "candidates": [c.model_dump() for c in result["candidates"]]}
+
+
+@pytest.mark.parametrize("fee, cookie_set, expected", [(1, False, True), (4, False, True), (0, False, False), (8, False, False), (1, True, False), (4, True, False)])
+def test_member_flag_persisted(service, monkeypatch, fee, cookie_set, expected):
+    service.config.settings.netease_cookie_set = cookie_set
+    service.providers = {"netease": service.providers["mock"]}
+    service.config.providers = [ProviderInfo(id="netease", label="网易云", max_quality="320k", order=0)]
+    monkeypatch.setattr(service.providers["netease"], "search", lambda *a: [RawCandidate(
+        "netease", "member", "晴天", "周杰伦", duration=180, extra={"fee": fee})])
+    events = []
+    result = service.search_one("晴天 周杰伦", 180, on_event=events.append)
+    candidate = result["candidates"][0]
+    assert candidate.needs_member is expected
+    assert candidate.verdict == "match"
+    assert service.candidate(candidate.id).needs_member is expected
+    assert events[1]["candidates"][0]["needs_member"] is expected
+    old = candidate.model_dump(exclude={"needs_member"})
+    service.db.save("candidates", old)
+    assert service.candidate(candidate.id).needs_member is False
