@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import threading
+from functools import partial
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from .errors import SongSeekError, public_error
-from .models import Job, now
+from .lyrics import has_lyrics_file
+from .models import Job, LyricsInfo, now
 
 
 class JobManager:
@@ -36,7 +38,7 @@ class JobManager:
         self.service.db.save("jobs", job.model_dump())
         self.service.events.emit("job", job.model_dump())
 
-    def start(self, kind: str, playlist_id: int, track_ids: list[int] | None = None) -> Job:
+    def start(self, kind: str, playlist_id: int, track_ids: list[int] | None = None, *, force: bool = False) -> Job:
         with self.lock:
             tracks = self.service.tracks(playlist_id)
             by_id = {t.id: t for t in tracks}
@@ -44,6 +46,10 @@ class JobManager:
                 raise SongSeekError("部分曲目不属于该清单", "invalid_tracks")
             allowed = ("pending", "not_found") if kind == "search" else ("matched",)
             selected = [t for t in tracks if (track_ids is None or t.id in track_ids) and (t.status in allowed if track_ids is None or kind == "download" else t.status not in ("searching", "queued", "downloading", "done", "skipped"))]
+            if kind == "lyrics":
+                selected = [t for t in tracks if t.status == "done" and t.file
+                            and (track_ids is None or t.id in track_ids) and (force or not has_lyrics_file(t))
+                            and self.service.config.settings.lyrics]
             if any(t.id in self.reserved for t in selected):
                 raise SongSeekError("曲目已在任务中", "track_busy", 409)
             ids = [t.id for t in selected]
@@ -56,10 +62,11 @@ class JobManager:
                     track.status = "queued"
                     self.service.save_track(track)
             self.save(job)
-            self.futures[job.id] = self.pool.submit(self._run, job.id, ids)
+            self.futures[job.id] = self.pool.submit(self._run, job.id, ids, force)
             return job
 
     def _execute(self, kind, cancel, operation, track_id):
+        kind = "download" if kind == "lyrics" else kind
         with self.capacity:
             while self.active[kind] >= getattr(self.service.config.settings, f"{kind}_concurrency"):
                 if cancel.is_set():
@@ -76,13 +83,15 @@ class JobManager:
                 self.active[kind] -= 1
                 self.capacity.notify_all()
 
-    def _run(self, identifier: int, ids: list[int]):
+    def _run(self, identifier: int, ids: list[int], force: bool):
         job = self.get(identifier)
         cancel = self.cancellations[identifier]
         concurrency = self.service.config.settings.search_concurrency if job.kind == "search" else self.service.config.settings.download_concurrency
         remaining = iter(ids)
         active = {}
         operation = self.service.search_track if job.kind == "search" else self.service.download_track
+        if job.kind == "lyrics":
+            operation = partial(self.service.lyrics_track, force=force)
         try:
             with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix=f"songseek-{job.kind}") as pool:
                 while True:
@@ -103,11 +112,15 @@ class JobManager:
                             if not future.result():
                                 continue
                             track = self.service.track(track_id)
-                            if track.status in ("failed", "not_found"):
+                            if track.status in ("failed", "not_found") or (job.kind == "lyrics" and track.file.lyrics and track.file.lyrics.error):
                                 job.failed += 1
                         except Exception as error:
                             track = self.service.track(track_id)
-                            track.status, track.error = "failed", public_error(error)
+                            if job.kind == "lyrics":
+                                track.file.lyrics = LyricsInfo(source=track.file.provider or "", source_label=track.file.provider_label or "",
+                                                              error="歌词获取或保存失败")
+                            else:
+                                track.status, track.error = "failed", public_error(error)
                             self.service.save_track(track)
                             job.failed += 1
                         job.completed += 1

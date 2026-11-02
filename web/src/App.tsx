@@ -133,7 +133,7 @@ function JobChip({ job }: { job: Job }) {
   return (
     <div className="job-chip">
       <div className="job-chip-head">
-        <span>{job.kind === "search" ? "搜索中" : "下载中"}</span>
+        <span>{job.kind === "search" ? "搜索中" : job.kind === "lyrics" ? "补歌词" : "下载中"}</span>
         <span className="mono">
           {job.completed}/{job.total}
         </span>

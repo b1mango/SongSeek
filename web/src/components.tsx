@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
 import { Check, CircleHelp, X, CircleAlert, CircleCheck, Info } from "lucide-react";
 import { FLAG_LABEL, STATUS, fmtDelta, fmtDuration, tolerance, type Tone } from "./format";
-import type { Candidate, CheckItem, TrackStatus, VersionFlag } from "./types";
+import type { Candidate, CheckItem, LyricsInfo, TrackStatus, VersionFlag } from "./types";
 
 /* ---------------- status ---------------- */
 
@@ -188,4 +188,23 @@ export function toneOfScore(score: number | null): Tone {
   if (score >= 90) return "ok";
   if (score >= 50) return "warn";
   return "bad";
+}
+
+/** Small tag telling whether a downloaded song has lyrics next to it. */
+export function LyricsTag({ info }: { info: LyricsInfo | null | undefined }) {
+  if (!info) return null;
+  if (info.error || (!info.path && !info.embedded)) {
+    return (
+      <span className="lyr-tag is-missing" title={info.error ?? "没有找到歌词"}>
+        无歌词
+      </span>
+    );
+  }
+  const kind = [info.synced ? "逐句同步" : "纯文本", info.translated ? "含翻译" : null, info.embedded ? "已内嵌" : null].filter(Boolean).join(" · ");
+  return (
+    <span className="lyr-tag" title={`歌词来自${info.source_label ?? "未知来源"}：${kind}${info.path ? `\n${info.path}` : ""}`}>
+      {info.synced ? "LRC" : "词"}
+      {info.translated ? <i>译</i> : null}
+    </span>
+  );
 }

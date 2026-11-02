@@ -33,6 +33,17 @@ export interface DownloadedFile {
   sha256: string;
   provider: string | null;
   provider_label: string | null;
+  lyrics?: LyricsInfo | null;
+}
+
+export interface LyricsInfo {
+  path: string | null;
+  source: string | null;
+  source_label: string | null;
+  synced: boolean;
+  translated: boolean;
+  embedded: boolean;
+  error: string | null;
 }
 
 export interface Track {
@@ -85,7 +96,7 @@ export interface Candidate {
 
 export interface Job {
   id: number;
-  kind: "search" | "download";
+  kind: "search" | "download" | "lyrics";
   playlist_id: number | null;
   status: "running" | "done" | "cancelled" | "error";
   total: number;
@@ -121,6 +132,9 @@ export interface Settings {
   search_concurrency: number;
   download_concurrency: number;
   auto_approve: boolean;
+  lyrics: boolean;
+  lyrics_embed: boolean;
+  lyrics_translation: boolean;
   netease_cookie_set: boolean;
 }
 

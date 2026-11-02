@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, CircleAlert, Crown, Download, FolderOpen, LoaderCircle, Search, X } from "lucide-react";
+import { Check, CircleAlert, Crown, Download, FolderOpen, LoaderCircle, ScrollText, Search, X } from "lucide-react";
 import { api, ApiError, type SearchEvent } from "../api";
-import { CheckChips, Flags, StatusBadge, useToast } from "../components";
+import { CheckChips, Flags, LyricsTag, StatusBadge, useToast } from "../components";
 import { fmtDuration } from "../format";
 import { useFlipList } from "../motion";
 import { PlayButton } from "../player";
@@ -27,6 +27,7 @@ export function SearchPage() {
   const [sources, setSources] = useState<SourceState[]>([]);
   const [startedAt, setStartedAt] = useState(0);
   const [showRejected, setShowRejected] = useState(false);
+  const [lyricsBusy, setLyricsBusy] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const body = useRef<HTMLTableSectionElement | null>(null);
 
@@ -100,6 +101,22 @@ export function SearchPage() {
     }
   }
 
+  async function fillLyrics() {
+    if (!track) return;
+    setLyricsBusy(true);
+    try {
+      const next = await api.trackLyrics(track.id, true);
+      setTrack(next);
+      const info = next.file?.lyrics;
+      if (info && !info.error && (info.path || info.embedded)) toast("ok", `已保存歌词（${info.source_label ?? "歌词"}）`);
+      else toast("info", info?.error ?? "没有找到这首歌的歌词");
+    } catch (e) {
+      toast("bad", (e as Error).message);
+    } finally {
+      setLyricsBusy(false);
+    }
+  }
+
   const viable = cands.filter((c) => c.verdict !== "reject");
   const rejected = cands.filter((c) => c.verdict === "reject");
   const shown = showRejected ? cands : viable;
@@ -144,10 +161,16 @@ export function SearchPage() {
                   {track.file.provider_label ? `${track.file.provider_label} · ` : ""}
                   {track.file.format.toUpperCase()}
                   {track.file.bitrate ? ` · ${track.file.bitrate}k` : ""} · {fmtDuration(track.file.duration)} · 已通过完整解码校验
+                  <LyricsTag info={track.file.lyrics} />
                 </span>
               </div>
               <div className="row gap-8 end">
-                <PlayButton playable={{ key: `t:${track.id}`, url: api.audioUrl(track.id), title: track.title, subtitle: "已下载" }} />
+                <PlayButton playable={{ key: `t:${track.id}`, url: api.audioUrl(track.id), title: track.title, subtitle: "已下载", lyricsUrl: api.trackLyricsUrl(track.id) }} />
+                {(!track.file.lyrics || track.file.lyrics.error || (!track.file.lyrics.path && !track.file.lyrics.embedded)) && (
+                  <button className="btn btn-sm" disabled={lyricsBusy} onClick={fillLyrics} title="重新查找并保存这首歌的歌词">
+                    {lyricsBusy ? <LoaderCircle className="spin" size={14} /> : <ScrollText size={14} />} 补歌词
+                  </button>
+                )}
                 <button className="btn btn-sm" onClick={() => api.reveal(track.id).catch((e) => toast("bad", e.message))}>
                   <FolderOpen size={14} /> 打开位置
                 </button>
@@ -187,7 +210,7 @@ export function SearchPage() {
                 {shown.map((c) => (
                   <tr key={c.id} data-flip={c.id} className={`cand v-${c.verdict}${track && c.id === track.chosen_candidate_id ? " is-chosen" : ""}`}>
                     <td>
-                      <PlayButton playable={{ key: `c:${c.id}`, url: c.preview_url, title: c.title, subtitle: c.needs_member ? `${c.provider_label}需会员 · 已换其他音源同版本试听` : `${c.artist} · ${c.provider_label} 试听` }} />
+                      <PlayButton playable={{ key: `c:${c.id}`, url: c.preview_url, title: c.title, subtitle: c.needs_member ? `${c.provider_label}需会员 · 已换其他音源同版本试听` : `${c.artist} · ${c.provider_label} 试听`, lyricsUrl: api.candidateLyricsUrl(c.id) }} />
                     </td>
                     <td>
                       <div className="song">

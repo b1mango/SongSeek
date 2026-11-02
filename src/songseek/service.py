@@ -16,6 +16,7 @@ from .errors import SongSeekError, log_failure, public_error
 from .events import Broadcaster
 from .importers import parse_file, parse_text
 from .matching import evaluate, evaluate_candidates, same_recording, sort_candidates
+from .lyrics import LyricsManager, has_lyrics_file
 from .models import Candidate, Health, Job, ParsedRow, Playlist, RawCandidate, STATUSES, Track, now
 from .normalize import version_flags
 from .providers import create_providers
@@ -35,6 +36,7 @@ class Service:
         self.provider_pool = ThreadPoolExecutor(max_workers=24, thread_name_prefix="songseek-provider")
         self.downloader = Downloader(self.config)
         self.previews = PreviewCache(self.config)
+        self.lyrics = LyricsManager(self)
         self._locks_guard = threading.Lock()
         self._locks: dict[int, threading.RLock] = {}
         self._recover()
@@ -316,11 +318,25 @@ class Service:
                     if track.chosen_candidate_id != candidate.id:
                         track.chosen_by = "auto"
                     track.chosen_candidate_id, track.status, track.error = candidate.id, "done", None
+                    if self.config.settings.lyrics:
+                        track.file.lyrics = self.lyrics.save(track)
                     return self.save_track(track)
                 except Exception as error:
                     errors.append(f"{candidate.provider_label}：{log_failure(candidate.provider, error)}")
             summary = (f"试了 {len(errors)} 个候选都失败 — " if len(errors) > 1 else "") + "；".join(dict.fromkeys(errors))
             track.status, track.error = "failed", summary[:300]
+            return self.save_track(track)
+
+    def lyrics_track(self, track_id: int, *, force: bool = False, in_job: bool = False) -> Track:
+        with self.lock(track_id):
+            track = self.track(track_id)
+            if not in_job:
+                self.ensure_idle(track)
+            if track.status != "done" or track.file is None:
+                raise SongSeekError("请先下载曲目再获取歌词", "not_downloaded")
+            if not self.config.settings.lyrics or (not force and has_lyrics_file(track)):
+                return track
+            track.file.lyrics = self.lyrics.save(track)
             return self.save_track(track)
 
     def batch(self, ids: list[int], action: str) -> list[Track]:
@@ -364,7 +380,7 @@ class Service:
     def export_csv(self, playlist_id: int) -> str:
         stream = io.StringIO(newline="")
         writer = csv.writer(stream)
-        writer.writerow(["序号", "歌名", "歌手", "状态", "来源", "音质", "时长", "文件路径", "备注"])
+        writer.writerow(["序号", "歌名", "歌手", "状态", "来源", "音质", "时长", "文件路径", "备注", "歌词"])
         def cell(value):
             text = str(value) if value is not None else ""
             return "'" + text if text.startswith(("=", "+", "-", "@", "\t", "\r")) else text
@@ -372,7 +388,8 @@ class Service:
             candidate = self.candidate(track.chosen_candidate_id) if track.chosen_candidate_id else None
             writer.writerow([cell(v) for v in [track.position, track.title, track.artist, track.status, candidate.provider_label if candidate else "",
                             f"{track.file.bitrate}k" if track.file and track.file.bitrate else candidate.quality.label if candidate else "",
-                            track.file.duration if track.file else track.duration, track.file.path if track.file else "", track.note or track.error or ""]])
+                            track.file.duration if track.file else track.duration, track.file.path if track.file else "", track.note or track.error or "",
+                            track.file.lyrics.path if track.file and track.file.lyrics else ""]])
         return "\ufeff" + stream.getvalue()
 
     def close(self):

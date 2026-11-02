@@ -7,6 +7,7 @@ import {
   ListChecks,
   LoaderCircle,
   Pencil,
+  ScrollText,
   RotateCcw,
   Search,
   SkipForward,
@@ -14,7 +15,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { api } from "../api";
-import { Flags, StatusBadge, toneOfScore, useToast } from "../components";
+import { Flags, LyricsTag, StatusBadge, toneOfScore, useToast } from "../components";
 import { fmtDuration } from "../format";
 import { PlayButton } from "../player";
 import { href, navigate } from "../router";
@@ -88,6 +89,11 @@ export function PlaylistPage({ id }: { id: number }) {
       upsertJob(await api.downloadPlaylist(id, ids));
       toast("info", "已开始下载");
     });
+  const fillLyrics = () =>
+    run("lyrics", async () => {
+      upsertJob(await api.playlistLyrics(id));
+      toast("info", "正在给已下载的歌补歌词，已有歌词的会跳过");
+    });
   const batch = (action: BatchAction, ids: number[]) =>
     run(action, async () => {
       const { updated } = await api.batch(ids, action);
@@ -127,6 +133,11 @@ export function PlaylistPage({ id }: { id: number }) {
           </p>
         </div>
         <div className="row gap-8">
+          {c.done > 0 && (
+            <button className="btn" disabled={busy === "lyrics"} onClick={fillLyrics} title="给已下载但还没有歌词的歌补上 .lrc 歌词">
+              {busy === "lyrics" ? <LoaderCircle className="spin" size={16} /> : <ScrollText size={16} />} 补歌词
+            </button>
+          )}
           <a className="btn" href={api.exportUrl(id)} download>
             <FileDown size={16} /> 导出结果
           </a>
@@ -346,6 +357,7 @@ function TrackRow({ t, checked, onCheck, onReveal }: { t: Track; checked: boolea
             <span className="mono small muted">
               {t.file.format.toUpperCase()}
               {t.file.bitrate ? ` · ${t.file.bitrate}k` : ""} · {fmtDuration(t.file.duration)}
+              <LyricsTag info={t.file.lyrics} />
             </span>
           </div>
         ) : t.best_score != null ? (
@@ -360,7 +372,7 @@ function TrackRow({ t, checked, onCheck, onReveal }: { t: Track; checked: boolea
       <td className="num row-actions" onClick={(e) => e.stopPropagation()}>
         {t.file && (
           <>
-            <PlayButton playable={{ key: `t:${t.id}`, url: api.audioUrl(t.id), title: t.title, subtitle: `${t.artist} · 已下载` }} size={28} />
+            <PlayButton playable={{ key: `t:${t.id}`, url: api.audioUrl(t.id), title: t.title, subtitle: `${t.artist} · 已下载`, lyricsUrl: api.trackLyricsUrl(t.id) }} size={28} />
             <button className="icon-btn" onClick={onReveal} aria-label="在文件夹中显示" title="在文件夹中显示">
               <FolderOpen size={15} />
             </button>

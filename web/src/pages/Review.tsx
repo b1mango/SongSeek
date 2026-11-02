@@ -548,7 +548,7 @@ function CandRow({
         <span className={`rank v-${c.verdict}`}>{c.rank}</span>
       </td>
       <td>
-        <PlayButton playable={{ key: `c:${c.id}`, url: c.preview_url, title: c.title, subtitle: c.needs_member ? `${c.provider_label}需会员 · 已换其他音源同版本试听` : `${c.artist} · ${c.provider_label} 试听` }} />
+        <PlayButton playable={{ key: `c:${c.id}`, url: c.preview_url, title: c.title, subtitle: c.needs_member ? `${c.provider_label}需会员 · 已换其他音源同版本试听` : `${c.artist} · ${c.provider_label} 试听`, lyricsUrl: api.candidateLyricsUrl(c.id) }} />
       </td>
       <td>
         <div className="song">

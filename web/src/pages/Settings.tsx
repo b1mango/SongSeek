@@ -160,6 +160,20 @@ export function SettingsPage() {
             <input type="checkbox" checked={draft.auto_approve} onChange={(e) => set("auto_approve", e.target.checked)} />
             各项检查都通过的歌自动选定（关掉后，每首都要你确认）
           </label>
+          <div className="check-group">
+            <label className="check-line">
+              <input type="checkbox" checked={draft.lyrics ?? true} onChange={(e) => set("lyrics", e.target.checked)} />
+              下载时一并保存歌词（同名 .lrc 文件，放在歌曲旁边）
+            </label>
+            <label className={`check-line sub${draft.lyrics === false ? " is-disabled" : ""}`}>
+              <input type="checkbox" disabled={draft.lyrics === false} checked={draft.lyrics_translation ?? false} onChange={(e) => set("lyrics_translation", e.target.checked)} />
+              外语歌附上中文翻译（有翻译时，每句原文下面跟一行译文）
+            </label>
+            <label className={`check-line sub${draft.lyrics === false ? " is-disabled" : ""}`}>
+              <input type="checkbox" disabled={draft.lyrics === false} checked={draft.lyrics_embed ?? false} onChange={(e) => set("lyrics_embed", e.target.checked)} />
+              同时把歌词写进音频文件（部分播放器只认内嵌歌词）
+            </label>
+          </div>
           <div className="grid-2">
             <label className="field">
               <span className="field-label">同时搜索</span>

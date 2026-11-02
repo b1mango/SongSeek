@@ -6,7 +6,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 from ..errors import SongSeekError
-from ..models import AudioSource, ParsedRow, ParseResult, RawCandidate
+from ..models import AudioSource, Lyrics, ParsedRow, ParseResult, RawCandidate
 from .base import BaseProvider, audio_url
 
 URL_PATTERN = re.compile(r"https?://[^\s<>\"'，。）)]+", re.I)
@@ -86,6 +86,12 @@ class NeteaseProvider(BaseProvider):
 
     def search(self, query: str, limit: int = 15) -> list[RawCandidate]:
         return parse_search(self.call("/api/cloudsearch/pc", s=query, type=1, limit=limit, offset=0))[:limit]
+
+    def lyrics(self, raw: RawCandidate) -> Lyrics | None:
+        data = self.call("/api/song/lyric", id=raw.source_id, lv=1, tv=-1)
+        if data.get("code") == 200 and data.get("lrc", {}).get("lyric"):
+            return Lyrics(data["lrc"]["lyric"], data.get("tlyric", {}).get("lyric"))
+        return None
 
     def resolve(self, candidate: RawCandidate) -> AudioSource:
         authenticated = self.config.settings.netease_cookie_set

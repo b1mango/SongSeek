@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from ..errors import SongSeekError
-from ..models import AudioSource, RawCandidate
+from ..models import AudioSource, Lyrics, RawCandidate
 from .base import BaseProvider, audio_url
 
 
@@ -60,3 +60,9 @@ class VKeysQQProvider(BaseProvider):
     def resolve(self, candidate: RawCandidate) -> AudioSource:
         data = self.request("GET", "https://api.vkeys.cn/music/tencent/song/link", params={"mid": candidate.source_id, "quality": 8})
         return parse_audio(data, candidate)
+
+    def lyrics(self, raw: RawCandidate) -> Lyrics | None:
+        data = self.request("GET", "https://api.vkeys.cn/v2/music/tencent/lyric", params={"mid": raw.source_id})
+        if data.get("code") == 200 and data.get("data", {}).get("lyric"):
+            return Lyrics(data["data"]["lyric"], data["data"].get("trans"))
+        return None

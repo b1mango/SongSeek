@@ -106,6 +106,8 @@ export const api = {
     request<{ track: Track; candidates: Candidate[] }>(`/tracks/${id}/search`, json("POST", { query, providers })),
   batch: (ids: number[], action: BatchAction) => request<{ updated: Track[] }>("/tracks/batch", json("POST", { ids, action })),
   audioUrl: (id: number) => `/api/tracks/${id}/audio`,
+  trackLyricsUrl: (id: number) => `/api/tracks/${id}/lyrics`,
+  candidateLyricsUrl: (id: number) => `/api/candidates/${id}/lyrics`,
   reveal: (id: number) => request<{ ok: true }>(`/tracks/${id}/reveal`, json("POST")),
 
   /** Streams per-provider results as NDJSON. Throws ApiError("http_404") on servers without streaming. */
@@ -143,6 +145,8 @@ export const api = {
     request<{ track: Track; candidates: Candidate[] }>("/search", json("POST", { query, duration })),
   searchPlaylist: (id: number, trackIds?: number[]) => request<Job>(`/playlists/${id}/search`, json("POST", { track_ids: trackIds })),
   downloadPlaylist: (id: number, trackIds?: number[]) => request<Job>(`/playlists/${id}/download`, json("POST", { track_ids: trackIds })),
+  playlistLyrics: (id: number) => request<Job>(`/playlists/${id}/lyrics`, json("POST")),
+  trackLyrics: (id: number, force = false) => request<Track>(`/tracks/${id}/lyrics`, json("POST", { force })),
   jobs: () => request<Job[]>("/jobs"),
   cancelJob: (id: number) => request<Job>(`/jobs/${id}/cancel`, json("POST")),
 

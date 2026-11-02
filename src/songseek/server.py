@@ -62,6 +62,10 @@ class TrackIds(Model):
     track_ids: list[int] | None = None
 
 
+class LyricsRequest(Model):
+    force: bool = False
+
+
 class Batch(Model):
     ids: list[int]
     action: Literal["accept_best", "skip", "unskip", "retry"]
@@ -81,6 +85,9 @@ class SettingsUpdate(Model):
     search_concurrency: int | None = Field(default=None, ge=1, le=32)
     download_concurrency: int | None = Field(default=None, ge=1, le=16)
     auto_approve: bool | None = None
+    lyrics: bool | None = None
+    lyrics_translation: bool | None = None
+    lyrics_embed: bool | None = None
     netease_cookie_set: bool | None = None
     netease_cookie: SecretStr | None = None
 
@@ -283,6 +290,22 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
     @app.post("/api/playlists/{identifier}/download")
     def download_playlist(identifier: int, body: TrackIds = TrackIds()):
         return current().jobs.start("download", identifier, body.track_ids)
+
+    @app.get("/api/candidates/{identifier}/lyrics")
+    def candidate_lyrics(identifier: int):
+        return current().lyrics.preview(identifier)
+
+    @app.get("/api/tracks/{identifier}/lyrics")
+    def track_lyrics(identifier: int):
+        return current().lyrics.read(current().track(identifier))
+
+    @app.post("/api/tracks/{identifier}/lyrics")
+    def save_lyrics(identifier: int, body: LyricsRequest = LyricsRequest()):
+        return current().lyrics_track(identifier, force=body.force)
+
+    @app.post("/api/playlists/{identifier}/lyrics")
+    def playlist_lyrics(identifier: int, body: LyricsRequest = LyricsRequest()):
+        return current().jobs.start("lyrics", identifier, force=body.force)
 
     @app.get("/api/jobs")
     def jobs():

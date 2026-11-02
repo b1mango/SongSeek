@@ -50,7 +50,36 @@ class Settings(Model):
     search_concurrency: int = Field(default=4, ge=1, le=32)
     download_concurrency: int = Field(default=2, ge=1, le=16)
     auto_approve: bool = True
+    lyrics: bool = True
+    lyrics_translation: bool = False
+    lyrics_embed: bool = False
     netease_cookie_set: bool = False
+
+
+class LyricsInfo(Model):
+    path: str | None = None
+    source: str
+    source_label: str
+    synced: bool = False
+    translated: bool = False
+    embedded: bool = False
+    error: str | None = None
+
+
+class LyricsResponse(Model):
+    model_config = ConfigDict(str_strip_whitespace=False)
+
+    lrc: str | None = None
+    synced: bool = False
+    source: str | None = None
+    source_label: str | None = None
+    translation: str | None = None
+
+
+@dataclass
+class Lyrics:
+    lrc: str
+    translation: str | None = None
 
 
 class DownloadedFile(Model):
@@ -62,6 +91,7 @@ class DownloadedFile(Model):
     sha256: str
     provider: str | None = None
     provider_label: str | None = None
+    lyrics: LyricsInfo | None = None
 
 
 class Track(ParsedRow):
@@ -124,7 +154,7 @@ class Candidate(Model):
 
 class Job(Model):
     id: int
-    kind: Literal["search", "download"]
+    kind: Literal["search", "download", "lyrics"]
     playlist_id: int | None
     status: Literal["running", "done", "cancelled", "error"]
     total: int

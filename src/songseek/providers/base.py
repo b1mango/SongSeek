@@ -8,7 +8,7 @@ import httpx
 
 from ..config import Config
 from ..errors import SongSeekError, public_error
-from ..models import AudioSource, Health, RawCandidate, now
+from ..models import AudioSource, Health, Lyrics, RawCandidate, now
 
 USER_AGENT = "Mozilla/5.0 (SongSeek local music tool)"
 
@@ -73,6 +73,9 @@ class BaseProvider(ABC):
 
     @abstractmethod
     def resolve(self, candidate: RawCandidate) -> AudioSource: ...
+
+    def lyrics(self, raw: RawCandidate) -> Lyrics | None:
+        return None
 
     def health(self) -> Health:
         started = time.monotonic()
