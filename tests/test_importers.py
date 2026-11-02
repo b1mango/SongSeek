@@ -114,3 +114,14 @@ def test_unrecognized_columns_can_be_remapped():
 def test_nested_list_prefix_and_slash_without_spaces():
     row = parse_text("- 1. 晴天/周杰伦").rows[0]
     assert (row.title, row.artist) == ("晴天", "周杰伦")
+
+
+def test_text_trailing_duration():
+    result = parse_text("晴天 - 周杰伦\t4:29\n后来 - 刘若英 (5:41)\n夜曲 - 周杰伦")
+    assert [(r.title, r.artist, r.duration) for r in result.rows] == [
+        ("晴天", "周杰伦", 269), ("后来", "刘若英", 341), ("夜曲", "周杰伦", None)]
+
+
+def test_tsv_guesses_duration_before_artist():
+    result = parse_text("晴天\t4:29\t周杰伦\n夜曲\t3:46\t周杰伦")
+    assert [(r.title, r.artist, r.duration) for r in result.rows] == [("晴天", "周杰伦", 269), ("夜曲", "周杰伦", 226)]

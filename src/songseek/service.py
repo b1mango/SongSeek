@@ -3,7 +3,7 @@ import io
 import json
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -18,10 +18,11 @@ from .matching import evaluate, sort_candidates
 from .models import Candidate, Health, Job, ParsedRow, Playlist, RawCandidate, STATUSES, Track, now
 from .normalize import version_flags
 from .providers import create_providers
-from .providers.mock import parse_query
+from .query import parse_query
 from .providers.netease import NeteaseProvider
 
 BUSY = {"searching", "queued", "downloading"}
+SEARCH_TIMEOUT = 9.5
 
 
 class Service:
@@ -30,7 +31,7 @@ class Service:
         self.db = Database(self.config.home / "songseek.db")
         self.events = Broadcaster()
         self.providers = create_providers(self.config)
-        self.provider_pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix="songseek-provider")
+        self.provider_pool = ThreadPoolExecutor(max_workers=24, thread_name_prefix="songseek-provider")
         self.downloader = Downloader(self.config)
         self.previews = PreviewCache(self.config)
         self._locks_guard = threading.Lock()
@@ -175,19 +176,16 @@ class Service:
             track.status, track.chosen_candidate_id, track.chosen_by, track.error = "matched", candidate_id, "user", None
             return self.save_track(track)
 
-    def _search_provider(self, provider_id: str, queries: list[str], deadline: float):
-        found, errors = [], []
+    def _search_provider(self, provider_id: str, query: str, deadline: float):
         provider = self.providers[provider_id]
-        for query in queries:
-            if time.monotonic() >= deadline:
-                break
-            try:
-                found.extend(provider.search(query, 15))
-            except Exception as error:
-                errors.append(f"{provider_id}：{log_failure(provider_id, error)}")
-        return found, errors
+        try:
+            with provider.search_budget(deadline):
+                provider.remaining(8)
+                return provider.search(query, 15), []
+        except Exception as error:
+            return [], [f"{provider_id}：{log_failure(provider_id, error)}"]
 
-    def search_track(self, track_id: int, query: str | None = None, providers: list[str] | None = None, *, in_job: bool = False) -> dict:
+    def search_track(self, track_id: int, query: str | None = None, providers: list[str] | None = None, *, in_job: bool = False, infer_query: bool = False) -> dict:
         with self.lock(track_id):
             track = self.track(track_id)
             if not in_job:
@@ -199,23 +197,35 @@ class Service:
                 enabled = list(dict.fromkeys(providers))
             track.status, track.error = "searching", None
             self.save_track(track)
-            queries = list(dict.fromkeys([query or f"{track.title} {track.artist}".strip(), track.title]))
-            deadline = time.monotonic() + 28
-            futures = {self.provider_pool.submit(self._search_provider, p, queries, deadline): p for p in enabled}
-            completed, pending = wait(futures, timeout=28)
+            first_query = query or f"{track.title} {track.artist}".strip()
+            deadline = time.monotonic() + SEARCH_TIMEOUT
+            futures = {self.provider_pool.submit(self._search_provider, p, first_query, deadline): p for p in enabled}
+            fallback = set()
             found, errors = {}, []
-            for future in completed:
-                raw_candidates, failures = future.result()
-                errors.extend(failures)
-                for raw in raw_candidates:
-                    found[(raw.provider, raw.source_id)] = raw
-            for future in pending:
+            infos = {p.id: p for p in self.config.providers}
+            while futures and time.monotonic() < deadline:
+                completed, _ = wait(futures, timeout=max(0, deadline - time.monotonic()), return_when=FIRST_COMPLETED)
+                for future in completed:
+                    provider_id = futures.pop(future)
+                    raw_candidates, failures = future.result()
+                    errors.extend(failures)
+                    for raw in raw_candidates:
+                        found[(raw.provider, raw.source_id)] = raw
+                    usable = [evaluate(track, raw, infos[provider_id].label) for raw in raw_candidates]
+                    if (not infer_query and not failures and provider_id not in fallback and first_query != track.title
+                            and not any(c.verdict != "reject" and c.checks[1].ok is not False for c in usable)):
+                        fallback.add(provider_id)
+                        futures[self.provider_pool.submit(self._search_provider, provider_id, track.title, deadline)] = provider_id
+            for future in futures:
                 future.cancel()
                 errors.append(f"{futures[future]}：搜索超时")
+            if infer_query:
+                ordered = sorted(found.values(), key=lambda raw: infos[raw.provider].order)
+                track.title, track.artist = parse_query(query, ordered)
+                track.flags = version_flags(track.title)
             for candidate in self.candidates(track_id):
                 raw = self.raw_candidate(candidate.id)
                 found.setdefault((raw.provider, raw.source_id), raw)
-            infos = {p.id: p for p in self.config.providers}
             ranked = sort_candidates([evaluate(track, raw, infos[raw.provider].label) for raw in found.values()], {p.id: p.order for p in self.config.providers})
             with self.db.transaction() as connection:
                 for candidate in ranked:
@@ -244,15 +254,12 @@ class Service:
 
     def search_one(self, query: str, duration: float | None = None) -> dict:
         title, artist = parse_query(query.strip())
-        # 单独歌名不能凭空产生歌手；mock 自己的默认署名仅用于候选。
-        if query.strip() == title:
-            artist = ""
         existing = next((p for p in self.playlists() if p.source == "search" and p.name == "单曲搜索"), None)
         playlist = existing or self.create_playlist("单曲搜索", "search", [])
         with self.db.transaction():
             tracks = self.tracks(playlist.id)
             track = self._add_track(playlist.id, ParsedRow(title=title, artist=artist, duration=duration), max((t.position for t in tracks), default=0) + 1)
-        return self.search_track(track.id)
+        return self.search_track(track.id, query=query.strip(), infer_query=True)
 
     def download_track(self, track_id: int, *, in_job: bool = False) -> Track:
         with self.lock(track_id):

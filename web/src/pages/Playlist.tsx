@@ -290,7 +290,7 @@ function NextSteps({
         <RotateCcw size={18} />
         <span>
           <b>重试失败的 {c.failed} 首</b>
-          <small>改用其他已匹配的音源再下</small>
+          <small>再试一次；仍失败可点该行「候选」换一个</small>
         </span>
       </button>
     ),

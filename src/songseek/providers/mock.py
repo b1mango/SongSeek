@@ -4,20 +4,15 @@ import threading
 
 from ..errors import SongSeekError
 from ..models import AudioSource, Health, RawCandidate, now
+from ..query import parse_query
 from .base import BaseProvider
-
-
-def parse_query(query: str) -> tuple[str, str]:
-    import re
-    parts = re.split(r"\s+[-–—]\s+|\s*/\s*", query, maxsplit=1)
-    if len(parts) == 2:
-        return parts[0], parts[1]
-    words = query.rsplit(" ", 1)
-    return (words[0], words[1]) if len(words) == 2 else (query, "演示歌手")
 
 
 def make_candidates(query: str) -> list[RawCandidate]:
     title, artist = parse_query(query)
+    # 演示数据没有外部曲库，仅生成固定格式的候选。
+    if not artist:
+        title, _, artist = query.rpartition(" ") if " " in query else (query, "", "演示歌手")
     if "不存在" in title:
         return []
     prefix = hashlib.sha256(query.encode()).hexdigest()[:16]

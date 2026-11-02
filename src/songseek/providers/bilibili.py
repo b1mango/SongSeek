@@ -21,7 +21,7 @@ def video_title(title: str, artist: str = "") -> tuple[str, str]:
     if parts and len(parts) == 2:
         artist = artist or parts[0].strip()
         title = parts[1].strip()
-    elif quoted:
+    elif quoted and not re.search(r"bass\s+tab|贝斯谱", quoted[1], re.I):
         prefix = title[:quoted.start()].strip(" ·-—:：")
         artist = artist or prefix
         title = quoted[1] + " " + title[quoted.end():]
@@ -79,7 +79,7 @@ class BilibiliProvider(BaseProvider):
                 if error.response.status_code != 412:
                     raise
             if attempt == 0:
-                time.sleep(.3)
+                self.backoff(.3)
         raise SongSeekError("哔哩哔哩请求被限制（412），稍后重试", "rate_limited")
 
     def search(self, query: str, limit: int = 15) -> list[RawCandidate]:

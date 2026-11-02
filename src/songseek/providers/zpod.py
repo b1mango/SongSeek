@@ -27,7 +27,7 @@ class ZpodProvider(BaseProvider):
     referer = "https://zpod.net/"
 
     def search(self, query: str, limit: int = 15) -> list[RawCandidate]:
-        return parse_search(self.request("GET", "https://zpod.net/proxy/hk/api/search", params={"q": query}))[:limit]
+        return parse_search(self.request("GET", "https://zpod.net/proxy/hk/api/search", params={"q": query}, timeout=4))[:limit]
 
     def resolve(self, candidate: RawCandidate) -> AudioSource:
         return parse_audio(self.request("GET", "https://zpod.net/proxy/hk/api/play", params={"id": candidate.source_id}), candidate)

@@ -59,8 +59,8 @@ def test_search_queries_bounded_deduplicated_and_provider_errors(service, monkey
     monkeypatch.setattr(provider, "search", search)
     playlist = service.create_playlist("失败隔离", "text", [ParsedRow(title="晴天", artist="周杰伦", duration=180)])
     result = service.search_track(service.tracks(playlist.id)[0].id)
-    assert calls == ["晴天 周杰伦", "晴天"]
-    assert result["candidates"] and result["track"].error
+    assert calls == ["晴天 周杰伦"]
+    assert not result["candidates"] and result["track"].error
     assert "should not leak" not in result["track"].error
 
 

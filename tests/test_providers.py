@@ -216,3 +216,64 @@ def test_bilibili_cookie_cached_and_412_retried(config, monkeypatch, blocked):
         assert bilibili.BilibiliProvider(config).search("晴天") == []
         assert len(calls) == 4
     assert sum(path.endswith("/spi") for path in calls) == 1
+
+
+@pytest.mark.parametrize("failure", [{"code": 110000, "message": "HTTP客户端异常：请求参数错误。"},
+                                     {"code": 429}, {"code": 500, "message": "操作频繁"}])
+def test_qq_transient_retry(config, monkeypatch, failure):
+    provider = vkeys_qq.VKeysQQProvider(config)
+    responses = iter([failure, failure, {"code": 0, "data": {"list": []}}])
+    delays = []
+    monkeypatch.setattr(provider, "backoff", delays.append)
+    monkeypatch.setattr(provider, "request", lambda *a, **kw: next(responses))
+    assert provider.search("晴天") == []
+    assert delays == [.4, .8]
+    calls = []
+    def fail(*a, **kw):
+        calls.append(1)
+        return failure
+    monkeypatch.setattr(provider, "request", fail)
+    with pytest.raises(SongSeekError):
+        provider.search("晴天")
+    assert len(calls) == 3
+
+
+def test_qq_http_429_retry_but_no_retry_other_errors(config, monkeypatch):
+    provider = vkeys_qq.VKeysQQProvider(config)
+    responses = iter([httpx.Response(429, request=httpx.Request("GET", "https://example.test")),
+                      httpx.Response(200, json={"code": 0, "data": {"list": []}}, request=httpx.Request("GET", "https://example.test"))])
+    def request(*a, **kw):
+        response = next(responses)
+        response.raise_for_status()
+        return response.json()
+    monkeypatch.setattr(provider, "request", request)
+    monkeypatch.setattr(provider, "backoff", lambda _: None)
+    assert provider.search("晴天") == []
+    monkeypatch.setattr(provider, "request", lambda *a, **kw: {"code": 100001})
+    monkeypatch.setattr(provider, "backoff", lambda _: pytest.fail("permanent errors must not retry"))
+    with pytest.raises(SongSeekError):
+        provider.search("晴天")
+
+
+def test_search_budget_includes_semaphore_queue(config):
+    provider = zpod.ZpodProvider(config)
+    with provider.semaphore, provider.semaphore, provider.search_budget(time.monotonic() + .02):
+        with pytest.raises(TimeoutError):
+            provider.search("晴天")
+
+
+def test_netease_search_endpoint(config, monkeypatch):
+    provider = netease.NeteaseProvider(config)
+    def call(path, **kwargs):
+        assert path == "/api/cloudsearch/pc"
+        assert kwargs == {"s": "晴天", "type": 1, "limit": 15, "offset": 0}
+        return {"code": 200, "result": {"songs": []}}
+    monkeypatch.setattr(provider, "call", call)
+    assert provider.search("晴天") == []
+
+
+def test_bilibili_tab_annotation_is_not_extracted_as_title():
+    title, artist = bilibili.video_title("そばにいるね 「Bass Tab 贝斯谱」")
+    from songseek.normalize import title_key
+    assert title_key(title) == title_key("そばにいるね")
+    assert artist == ""

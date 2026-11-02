@@ -97,3 +97,31 @@ def test_review_tie_prefers_known_duration_before_quality_and_provider():
     unknown = evaluate(track(duration=None), candidate(duration=None, bitrate=320), "演示")
     assert known.verdict == unknown.verdict == "review" and known.score == unknown.score
     assert sort_candidates([unknown, known], {"mock": 0, "other": 1}) == [known, unknown]
+
+
+@pytest.mark.parametrize("wanted, artist, found, singer", [
+    ("そばにいるね (feat. SoulJa)", "青山テルマ feat. SoulJa", "そばにいるね", "青山テルマ"),
+    ("Dusk Till Dawn (feat. Sia)", "ZAYN", "Dusk Til Dawn (Lyrics) ft. Sia", "Zayn"),
+    ("你从未离去 (电影《熊出没》插曲)", "白挺", "你从未离去 (最终版)", "白挺"),
+    ("我的楼兰", "云朵", "我的楼兰 百万豪装录音棚大声听【Hi-res】", "云朵"),
+    ("そばにいるね", "青山テルマ", "そばにいるね 「Bass Tab 贝斯谱」", "青山テルマ"),
+])
+def test_real_title_noise(wanted, artist, found, singer):
+    for left, right in [(wanted, found), (found, wanted)]:
+        assert evaluate(track(title=left, artist=artist), candidate(title=right, artist=singer), "演示").verdict == "match"
+
+
+def test_cover_credit_removed_but_missing_cover_still_needs_review():
+    result = evaluate(track(title="Stay With Me(Cover 灿烈&PUNCH)(翻自 灿烈)", artist="XIANG"),
+                      candidate(title="Stay With Me", artist="Xiang"), "演示")
+    assert result.checks[0].label == "歌名一致"
+    assert result.checks[1].ok is True
+    assert result.verdict == "review" and result.checks[3].label == "缺少翻唱标记"
+
+
+@pytest.mark.parametrize("noise", ["(Lyrics)", "(Lyric Video)", "(Official Video)", "(Official Audio)",
+                                   "(Official MV)", "MV", "歌词版", "动态歌词", "高音质", "Hi-res", "无损", "4K", "最终版"])
+def test_video_noise_keeps_real_versions(noise):
+    from songseek.normalize import title_key
+    assert title_key("晴天 " + noise) == title_key("晴天")
+    assert evaluate(track(), candidate(title="晴天 Live " + noise), "演示").verdict == "reject"

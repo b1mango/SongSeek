@@ -116,19 +116,26 @@ def markdown_tables(text: str) -> list[list[list[str]]]:
     return tables
 
 
+TRAILING_DURATION = re.compile(r"\s+[(（\[]?(\d{1,3}):([0-5]\d)[)）\]]?\s*$")
+
+
 def parse_text(text: str, name: str = "粘贴清单", mapping: dict | None = None) -> ParseResult:
     lines = [line for line in text.splitlines() if line.strip()]
-    if lines and sum("\t" in line for line in lines) * 2 >= len(lines):
+    # 「歌名 - 歌手<Tab>4:29」这种只多一列时长的，仍按行解析。
+    if lines and sum("\t" in TRAILING_DURATION.sub("", line) for line in lines) * 2 >= len(lines):
         return parse_tsv(lines, name, mapping)
     rows, dashed = [], 0
     for line in lines:
         line = re.sub(r"^\s*(?:(?:[-*+•]\s+)|(?:\(?\d+[.)、．]\s*)|(?:\d+\s+))+", "", line).strip()
+        duration = None
+        if found := TRAILING_DURATION.search(line):
+            duration, line = int(found[1]) * 60 + int(found[2]), line[:found.start()].strip()
         if not line:
             continue
         parts = re.split(r"\s+[-–—]\s+|\s*/\s*", line, maxsplit=1)
         title, artist = parts if len(parts) == 2 else (line, "")
         dashed += len(parts) == 2 and bool(re.search(r"\s+[-–—]\s+", line))
-        rows.append(ParsedRow(title=title.strip(), artist=artist.strip()))
+        rows.append(ParsedRow(title=title.strip(), artist=artist.strip(), duration=duration))
     warnings = [f"有 {dashed} 行按「歌名 - 歌手」解析；如果你的清单是「歌手 - 歌名」，请调换顺序后再粘贴"] if dashed else []
     return ParseResult(name=name, source="text", rows=rows, warnings=warnings)
 
@@ -143,14 +150,15 @@ def parse_tsv(lines: list[str], name: str, mapping: dict | None) -> ParseResult:
         result = table_result(table, name, "text", mapping)
     else:
         columns = [f"第{n}列" for n in range(1, width + 1)]
-        guess: dict = {"title": columns[0], "artist": columns[1] if width > 1 else None}
-        for index, column in enumerate(columns[2:], 2):
+        guess: dict = {"title": columns[0], "artist": None}
+        for index, column in enumerate(columns[1:], 1):
             values = [row[index].strip() for row in table if row[index].strip()]
-            if values and sum(bool(re.fullmatch(r"\d{1,3}:\d{2}(?::\d{2})?", v)) for v in values) * 2 >= len(values):
+            if "duration" not in guess and values and sum(bool(re.fullmatch(r"\d{1,3}:\d{2}(?::\d{2})?", v)) for v in values) * 2 >= len(values):
                 guess["duration"] = column
-                break
+            elif guess["artist"] is None and values:
+                guess["artist"] = column
         result = table_result([columns, *table], name, "text", guess | (mapping or {}))
-        result.warnings.insert(0, "表格没有表头，已按「第 1 列歌名、第 2 列歌手」猜测，可在下方调整列对应")
+        result.warnings.insert(0, "表格没有表头，已按内容猜测每列是什么，可在下方调整列对应")
     return result
 
 

@@ -1,6 +1,7 @@
 import threading
 import time
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from urllib.parse import urlsplit
 
 import httpx
@@ -27,6 +28,34 @@ class BaseProvider(ABC):
     def __init__(self, config: Config):
         self.config = config
         self.semaphore = threading.BoundedSemaphore(2)
+        self._search = threading.local()
+
+    @contextmanager
+    def search_budget(self, deadline: float):
+        self._search.deadline = deadline
+        try:
+            yield
+        finally:
+            del self._search.deadline
+
+    def remaining(self, timeout: float) -> float:
+        remaining = min(timeout, getattr(self._search, "deadline", float("inf")) - time.monotonic())
+        if remaining <= 0:
+            raise TimeoutError("search deadline")
+        return remaining
+
+    @contextmanager
+    def slot(self):
+        if not self.semaphore.acquire(timeout=self.remaining(8)):
+            raise TimeoutError("provider queue timeout")
+        try:
+            yield
+        finally:
+            self.semaphore.release()
+
+    def backoff(self, delay: float):
+        time.sleep(self.remaining(delay))
+        self.remaining(8)
 
     def client(self, timeout: float = 8) -> httpx.Client:
         return httpx.Client(proxy=(self.config.settings.proxy or None) if self.uses_proxy else None, trust_env=False,
@@ -34,7 +63,7 @@ class BaseProvider(ABC):
                             headers={"User-Agent": USER_AGENT, "Referer": self.referer})
 
     def request(self, method: str, url: str, **kwargs) -> dict:
-        with self.semaphore, self.client() as client:
+        with self.slot(), self.client(timeout=self.remaining(kwargs.pop("timeout", 8))) as client:
             response = client.request(method, url, **kwargs)
             response.raise_for_status()
             return response.json()

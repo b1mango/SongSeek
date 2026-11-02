@@ -1,5 +1,7 @@
 from urllib.parse import urlsplit
 
+import httpx
+
 from ..errors import SongSeekError
 from ..models import AudioSource, RawCandidate
 from .base import BaseProvider, audio_url
@@ -15,6 +17,8 @@ def parse_song(song: dict) -> RawCandidate:
 
 def parse_search(data: dict) -> list[RawCandidate]:
     if data.get("code") != 0:
+        if data.get("code") == 110000:
+            raise SongSeekError("QQ 音乐搜索失败（VKeys 110000：上游 HTTP 客户端异常）", "provider_error")
         raise SongSeekError("QQ 音乐搜索失败", "provider_error")
     songs = data.get("data", {}).get("list", [])
     return [parse_song(song) for song in songs]
@@ -37,8 +41,19 @@ class VKeysQQProvider(BaseProvider):
     referer = "https://y.qq.com/"
 
     def search(self, query: str, limit: int = 15) -> list[RawCandidate]:
-        data = self.request("GET", "https://api.vkeys.cn/music/tencent/search/song", params={"keyword": query, "page": 1})
-        return parse_search(data)[:limit]
+        for attempt in range(3):
+            try:
+                data = self.request("GET", "https://api.vkeys.cn/music/tencent/search/song", params={"keyword": query, "page": 1}, timeout=4)
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code != 429 or attempt == 2:
+                    raise
+            else:
+                limited = data.get("code") == 429 or any(word in str(data.get("message", data.get("msg", ""))) for word in ("频繁", "限流"))
+                if not limited and (data.get("code") != 110000 or attempt == 2):
+                    return parse_search(data)[:limit]
+                if limited and attempt == 2:
+                    raise SongSeekError("QQ 音乐搜索限流，稍后重试", "rate_limited")
+            self.backoff(.4 * 2 ** attempt)
 
     def resolve(self, candidate: RawCandidate) -> AudioSource:
         data = self.request("GET", "https://api.vkeys.cn/music/tencent/song/link", params={"mid": candidate.source_id, "quality": 8})

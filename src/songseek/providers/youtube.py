@@ -41,11 +41,11 @@ class YouTubeProvider(BaseProvider):
     id = "youtube"
     uses_proxy = True
 
-    def command(self, arguments: list[str], timeout: int = 11) -> dict:
+    def command(self, arguments: list[str], timeout: int = 8) -> dict:
         command = ["yt-dlp", "--ignore-config", "--no-cache-dir", "--no-update", "--no-warnings", "--socket-timeout", "7", "--retries", "0", "--proxy", self.config.settings.proxy]
         try:
-            with self.semaphore:
-                result = subprocess.run(command + arguments, capture_output=True, text=True, timeout=timeout,
+            with self.slot():
+                result = subprocess.run(command + arguments, capture_output=True, text=True, timeout=self.remaining(timeout),
                                         env={k: v for k, v in os.environ.items() if k.lower() not in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")})
         except FileNotFoundError:
             raise SongSeekError("未安装系统 yt-dlp", "missing_tool") from None

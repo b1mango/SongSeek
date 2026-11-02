@@ -77,11 +77,11 @@ class NeteaseProvider(BaseProvider):
             if not rate_limited(result):
                 return result
             if attempt < 3:
-                time.sleep(random.uniform(.5, .75) * 2 ** attempt)
+                self.backoff(random.uniform(.5, .75) * 2 ** attempt)
         raise SongSeekError("网易云限流（操作频繁），稍后重试", "rate_limited")
 
     def search(self, query: str, limit: int = 15) -> list[RawCandidate]:
-        return parse_search(self.call("/api/search/get/web", s=query, type=1, limit=limit, offset=0))[:limit]
+        return parse_search(self.call("/api/cloudsearch/pc", s=query, type=1, limit=limit, offset=0))[:limit]
 
     def resolve(self, candidate: RawCandidate) -> AudioSource:
         authenticated = self.config.settings.netease_cookie_set
