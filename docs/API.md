@@ -175,6 +175,19 @@ interface ParseResult {
 | POST | `/api/jobs/{id}/cancel` | 返回 `Job` |
 | GET | `/api/candidates/{id}/preview` | 代理该候选的音频流，用于试听，支持 Range。只接受数据库里已有的候选 ID，不能当作通用代理 |
 
+### 歌词
+`LyricsResponse = {lrc: string|null, synced: bool, source: string|null, source_label: string|null, translation: string|null}`；`DownloadedFile.lyrics = {path, source, source_label, synced, translated, embedded, error} | null`。
+来源顺序：选定候选 → 同版本其他候选 → 网易云新搜索 → 酷狗歌词库关键词 → LRCLIB，同步歌词优先，总预算 8 秒；命中缓存 10 分钟，未命中 60 秒。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/candidates/{id}/lyrics` | 试听用歌词，返回 `LyricsResponse` |
+| GET | `/api/tracks/{id}/lyrics` | 已下载曲目：读取旁边的 .lrc，没有时按选定候选查找 |
+| POST | `/api/tracks/{id}/lyrics` | `{force?}`，为已下载曲目保存歌词，返回 `Track` |
+| POST | `/api/playlists/{id}/lyrics` | `{force?}`，批量补歌词（默认跳过已有 .lrc 的），返回 `Job`（kind `lyrics`） |
+
+设置项：`lyrics`（默认开，下载时保存 .lrc）、`lyrics_translation`（附译文，同时间戳第二行）、`lyrics_embed`（写入音频标签）。
+
 ### 实时事件（SSE）
 `GET /api/events` 返回 `text/event-stream`，每 15 秒发一次注释行 `: ping`。事件类型如下：
 
