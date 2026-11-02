@@ -9,6 +9,10 @@ from ..errors import SongSeekError
 from ..models import AudioSource, ParsedRow, ParseResult, RawCandidate
 from .base import BaseProvider, audio_url
 
+URL_PATTERN = re.compile(r"https?://[^\s<>\"'，。）)]+", re.I)
+SHORT_HOSTS = ("163cn.tv", "163cn.link")
+PLAYLIST_ROUTE = re.compile(r"playlist(?:/(\d+)|\?([^#]*))", re.I)
+
 _request_lock = threading.Lock()
 _last_request = 0.0
 
@@ -92,16 +96,39 @@ class NeteaseProvider(BaseProvider):
         values.update({"level": "exhigh", "encodeType": "mp3"} if authenticated else {"br": 320000})
         return parse_audio(self.call(path, authenticated=authenticated, **values), candidate)
 
-    def playlist(self, url: str) -> ParseResult:
+    def expand_short_link(self, url: str) -> str:
+        try:
+            with self.client() as client:
+                response = client.get(url, follow_redirects=False)
+        except Exception as error:
+            raise SongSeekError("短链接展开失败，请复制完整歌单链接", "invalid_playlist_url") from error
+        location = response.headers.get("location", "")
+        if not location:
+            raise SongSeekError("短链接展开失败，请复制完整歌单链接", "invalid_playlist_url")
+        return location
+
+    def playlist_id(self, text: str) -> str:
+        found = URL_PATTERN.search(text.strip())
+        if not found:
+            raise SongSeekError("没有找到链接，请粘贴网易云歌单链接", "invalid_playlist_url")
+        url = found.group(0)
+        if urlsplit(url).hostname in SHORT_HOSTS:
+            url = self.expand_short_link(url)
         parsed = urlsplit(url)
-        if parsed.hostname not in ("music.163.com", "y.music.163.com") or parsed.scheme not in ("http", "https"):
+        host = parsed.hostname or ""
+        if parsed.scheme not in ("http", "https") or not (host == "music.163.com" or host.endswith(".music.163.com")):
             raise SongSeekError("只支持网易云公开歌单链接", "invalid_playlist_url")
-        route = parsed.fragment if parsed.fragment else parsed.path + "?" + parsed.query
-        if not re.match(r"^/?(?:m/)?playlist\?", route):
-            raise SongSeekError("无法识别网易云歌单链接", "invalid_playlist_url")
-        identifier = parse_qs(route.split("?", 1)[1]).get("id", [""])[0]
-        if not identifier.isdigit():
-            raise SongSeekError("歌单链接缺少有效 ID", "invalid_playlist_url")
+        for route in (parsed.fragment, parsed.path + "?" + parsed.query):
+            match = PLAYLIST_ROUTE.search(route)
+            if match:
+                identifier = match.group(1) or parse_qs(match.group(2) or "").get("id", [""])[0]
+                if identifier.isdigit():
+                    return identifier
+                raise SongSeekError("歌单链接缺少有效 ID", "invalid_playlist_url")
+        raise SongSeekError("这不是歌单链接（可能是单曲或专辑），请打开歌单后复制链接", "invalid_playlist_url")
+
+    def playlist(self, url: str) -> ParseResult:
+        identifier = self.playlist_id(url)
         data = self.call("/api/v6/playlist/detail", id=identifier, n=1000, s=0)
         if data.get("code") != 200 or not data.get("playlist"):
             raise SongSeekError("无法读取公开歌单", "provider_error")

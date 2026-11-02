@@ -153,11 +153,14 @@ export function ImportPage() {
               if (url.trim()) parse({ kind: "url", url: url.trim() });
             }}
           >
-            <input className="input grow" placeholder="https://music.163.com/playlist?id=…" value={url} onChange={(e) => setUrl(e.target.value)} />
+            <input className="input grow" placeholder="粘贴网易云歌单链接或分享文字" value={url} onChange={(e) => setUrl(e.target.value)} />
             <button className="btn btn-primary" disabled={!url.trim() || parsing}>
               {parsing && <LoaderCircle className="spin" size={16} />} 读取歌单
             </button>
           </form>
+        )}
+        {mode === "url" && (
+          <div className="muted small">浏览器地址栏的歌单链接、App 里「分享 → 复制链接」得到的文字或短链接都可以直接粘贴；歌单需要是公开的。</div>
         )}
         {parsing && mode === "file" && (
           <div className="muted small row gap-8">

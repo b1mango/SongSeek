@@ -92,6 +92,36 @@ def test_netease_playlist_fetches_missing(config, monkeypatch, url):
     assert result.rows[-1].title == "歌403"
 
 
+@pytest.mark.parametrize("text", [
+    "https://music.163.com/#/my/m/music/playlist?id=8809200970",
+    "https://music.163.com/#/playlist?id=8809200970&userid=123",
+    "https://music.163.com/playlist/8809200970/123/?userid=123",
+    "https://y.music.163.com/m/playlist?app_version=9.0&id=8809200970&userid=1&dlt=0846",
+    "分享XX创建的歌单「测试」: https://y.music.163.com/m/playlist?id=8809200970&userid=1 (来自@网易云音乐)",
+    "  https://music.163.com/#/playlist?id=8809200970  ",
+])
+def test_netease_playlist_id_formats(config, text):
+    assert NeteaseProvider(config).playlist_id(text) == "8809200970"
+
+
+def test_netease_playlist_short_link(config, monkeypatch):
+    provider = NeteaseProvider(config)
+    monkeypatch.setattr(provider, "expand_short_link", lambda url: "https://y.music.163.com/m/playlist?id=77&userid=1")
+    assert provider.playlist_id("分享歌单 http://163cn.tv/AbCd12 (来自@网易云音乐)") == "77"
+
+
+@pytest.mark.parametrize("text,message", [
+    ("https://music.163.com/#/song?id=1", "不是歌单"),
+    ("https://music.163.com/#/album?id=1", "不是歌单"),
+    ("https://example.com/playlist?id=1", "只支持网易云"),
+    ("8809200970", "没有找到链接"),
+    ("https://music.163.com/#/playlist?id=abc", "缺少有效 ID"),
+])
+def test_netease_playlist_id_rejects(config, text, message):
+    with pytest.raises(SongSeekError, match=message):
+        NeteaseProvider(config).playlist_id(text)
+
+
 def test_import_validation():
     with pytest.raises(SongSeekError, match="列映射"):
         parse_file(b"title,artist\na,b", "a.csv", {"title": "missing"})
