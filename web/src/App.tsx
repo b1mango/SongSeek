@@ -1,0 +1,156 @@
+import { useEffect } from "react";
+import { CloudOff, FileUp, ListMusic, Search, Settings2 } from "lucide-react";
+import { api } from "./api";
+import { ToastProvider, useToast } from "./components";
+import { PlayerProvider } from "./player";
+import { href, useRoute, type Route } from "./router";
+import { refreshPlaylists, upsertJob, useLiveConnection, useStore } from "./store";
+import { HomePage } from "./pages/Home";
+import { ImportPage } from "./pages/Import";
+import { PlaylistPage } from "./pages/Playlist";
+import { ReviewPage } from "./pages/Review";
+import { SearchPage } from "./pages/Search";
+import { SettingsPage } from "./pages/Settings";
+import type { Job } from "./types";
+
+export function App() {
+  return (
+    <ToastProvider>
+      <PlayerProvider>
+        <Shell />
+      </PlayerProvider>
+    </ToastProvider>
+  );
+}
+
+function Shell() {
+  useLiveConnection();
+  const route = useRoute();
+  const toast = useToast();
+  useEffect(() => {
+    refreshPlaylists().catch((e) => toast("bad", e.message));
+  }, [toast]);
+
+  return (
+    <div className="shell">
+      <Sidebar route={route} />
+      <main className="main">
+        <Page route={route} />
+      </main>
+    </div>
+  );
+}
+
+function Page({ route }: { route: Route }) {
+  switch (route.page) {
+    case "import":
+      return <ImportPage />;
+    case "search":
+      return <SearchPage />;
+    case "settings":
+      return <SettingsPage />;
+    case "playlist":
+      return <PlaylistPage key={route.id} id={route.id} />;
+    case "review":
+      return <ReviewPage key={route.id} id={route.id} focus={route.track} />;
+    default:
+      return <HomePage />;
+  }
+}
+
+function Sidebar({ route }: { route: Route }) {
+  const playlists = useStore((s) => s.playlists);
+  const jobs = useStore((s) => s.jobs);
+  const connected = useStore((s) => s.connected);
+  const running = jobs.filter((j) => j.status === "running");
+  const activeId = route.page === "playlist" || route.page === "review" ? route.id : null;
+
+  const nav = (r: Route, label: string, Icon: typeof Search, active: boolean) => (
+    <a className={`nav-item${active ? " is-active" : ""}`} href={href(r)}>
+      <Icon size={16} aria-hidden />
+      {label}
+    </a>
+  );
+
+  return (
+    <aside className="sidebar">
+      <a className="brand" href="#/">
+        <span className="brand-disc" aria-hidden />
+        <span className="brand-name">觅音</span>
+        <span className="brand-en">SongSeek</span>
+      </a>
+
+      <nav className="nav">
+        {nav({ page: "import" }, "导入清单", FileUp, route.page === "import")}
+        {nav({ page: "search" }, "单曲搜索", Search, route.page === "search")}
+      </nav>
+
+      <div className="side-section">
+        <div className="side-label">
+          <ListMusic size={13} aria-hidden /> 清单
+        </div>
+        {playlists.length === 0 && <div className="side-empty">还没有清单</div>}
+        <ul className="side-lists">
+          {playlists.map((p) => {
+            const done = p.counts.done;
+            const review = p.counts.needs_review;
+            return (
+              <li key={p.id}>
+                <a className={`side-list${activeId === p.id ? " is-active" : ""}`} href={href({ page: "playlist", id: p.id })}>
+                  <span className="side-list-name">{p.name}</span>
+                  {review > 0 && <span className="side-pill tone-warn" title={`${review} 首待审核`}>{review}</span>}
+                  <span className="side-list-meta mono">
+                    {done}/{p.counts.total}
+                  </span>
+                  <span className="side-progress" style={{ width: `${p.counts.total ? (done / p.counts.total) * 100 : 0}%` }} />
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+
+      <div className="side-foot">
+        {running.map((j) => (
+          <JobChip key={j.id} job={j} />
+        ))}
+        {!connected && (
+          <div className="offline">
+            <CloudOff size={14} aria-hidden /> 未连接本地服务
+          </div>
+        )}
+        {nav({ page: "settings" }, "音源与设置", Settings2, route.page === "settings")}
+      </div>
+    </aside>
+  );
+}
+
+function JobChip({ job }: { job: Job }) {
+  const toast = useToast();
+  const pct = job.total ? Math.round((job.completed / job.total) * 100) : 0;
+  return (
+    <div className="job-chip">
+      <div className="job-chip-head">
+        <span>{job.kind === "search" ? "搜索中" : "下载中"}</span>
+        <span className="mono">
+          {job.completed}/{job.total}
+        </span>
+        <button
+          className="link-btn"
+          onClick={() =>
+            api
+              .cancelJob(job.id)
+              .then(upsertJob)
+              .catch((e) => toast("bad", e.message))
+          }
+        >
+          停止
+        </button>
+      </div>
+      <div className="meter">
+        <span style={{ width: `${pct}%` }} />
+      </div>
+      {job.current && <div className="job-chip-current">{job.current}</div>}
+    </div>
+  );
+}
