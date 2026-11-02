@@ -173,7 +173,7 @@ export function SettingsPage() {
           <label className="field">
             <span className="field-label">代理</span>
             <input className="input mono" placeholder="留空表示直连，例如 http://127.0.0.1:7890" value={draft.proxy} onChange={(e) => set("proxy", e.target.value)} />
-            <span className="field-help">YouTube 等境外音源通常需要代理。</span>
+            <span className="field-help">只有 YouTube 走代理；网易云、QQ、酷狗等国内音源始终直连（走代理反而容易被限流）。</span>
           </label>
           <div className="row end">
             <button className="btn btn-primary" disabled={!dirty || saving} onClick={() => save()}>

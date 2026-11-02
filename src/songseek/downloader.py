@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 
 import mutagen
@@ -153,6 +154,7 @@ def remux(path: Path, ext: str) -> None:
         result = subprocess.run(["ffmpeg", "-v", "error", "-xerror", "-i", str(path), "-map", "0:a:0", "-c:a", "copy", "-f", "ipod" if ext == "m4a" else "opus", "-y", str(output)], capture_output=True, timeout=120)
         if result.returncode:
             raise SongSeekError("音频容器转换失败", "invalid_audio")
+        output.chmod(path.stat().st_mode & 0o777)
         os.replace(output, path)
     finally:
         output.unlink(missing_ok=True)
@@ -199,17 +201,15 @@ class Downloader:
         if settings.group_by_playlist:
             directory /= safe_name(playlist_name)
         directory.mkdir(parents=True, exist_ok=True)
-        fd, name = tempfile.mkstemp(prefix=".songseek-", suffix=".part", dir=directory)
+        partial = directory / f".songseek-{uuid.uuid4().hex}.part"
+        fd = os.open(partial, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         os.close(fd)
-        partial = Path(name)
         try:
             source = provider.resolve(raw)
             transfer(source, partial, provider)
             if raw.provider in ("bilibili", "youtube") and source.ext in ("m4a", "opus"):
                 remux(partial, source.ext)
             info = verify(partial, track.duration if track.duration is not None else raw.duration)
-            if raw.provider == "vkeys_qq" and (info["codec"] != "mp3" or info["bitrate"] != 320):
-                raise SongSeekError("QQ 实际文件不是 320k MP3", "quality_mismatch")
             cover = None
             if raw.extra.get("cover_url"):
                 with provider.semaphore, provider.client() as client:

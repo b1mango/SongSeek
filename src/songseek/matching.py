@@ -1,16 +1,21 @@
 from rapidfuzz.fuzz import ratio
 
 from .models import Candidate, CheckItem, Quality, RawCandidate, Track
-from .normalize import FLAG_LABELS, artist_set, title_key, tolerance, version_flags
+from .normalize import FLAG_LABELS, artists_match, title_key, tolerance, version_flags
 
 
-def evaluate(track: Track, raw: RawCandidate, label: str) -> Candidate:
+def evaluate(track: Track, raw: RawCandidate, label: str, *, duration_confirmed: bool = False) -> Candidate:
     expected, actual = title_key(track.title), title_key(raw.title)
     similarity = ratio(expected, actual) if expected and actual else 0
     title_ok = similarity >= 90
-    artist_ok = bool(artist_set(track.artist) & artist_set(raw.artist)) if track.artist else None
+    artist_ok = artists_match(track.artist, raw.artist) if track.artist else None
     delta = raw.duration - track.duration if raw.duration is not None and track.duration is not None else None
     duration_ok = abs(delta) <= tolerance(track.duration) if delta is not None else None
+    duration_label = "缺少时长信息" if delta is None else f"时长差 {delta:+.1f}s"
+    if duration_confirmed:
+        duration_ok = True
+        minutes, seconds = divmod(round(raw.duration), 60)
+        duration_label = f"多个音源时长一致 {minutes}:{seconds:02d}"
     flags = version_flags(raw.title + " " + raw.extra.get("version_evidence", ""))
     extra = set(flags) - set(track.flags)
     missing = set(track.flags) - set(flags)
@@ -23,7 +28,7 @@ def evaluate(track: Track, raw: RawCandidate, label: str) -> Candidate:
     checks = [
         CheckItem(key="title", ok=title_ok, label="歌名一致" if similarity == 100 else f"歌名相似度 {similarity:.0f}%"),
         CheckItem(key="artist", ok=artist_ok, label="清单未填歌手" if artist_ok is None else "歌手一致" if artist_ok else "歌手不同"),
-        CheckItem(key="duration", ok=duration_ok, label="缺少时长信息" if delta is None else f"时长差 {delta:+.1f}s"),
+        CheckItem(key="duration", ok=duration_ok, label=duration_label),
         CheckItem(key="version", ok=version_ok, label=version_label),
         CheckItem(key="quality", ok=True if raw.bitrate else None, label=f"{raw.bitrate}k {raw.format.upper()}" if raw.bitrate else "音质待确认"),
         CheckItem(key="popularity", ok=True if raw.popularity is not None else None, label=f"热度 {raw.popularity:.0%}" if raw.popularity is not None else "热度未知"),
@@ -43,6 +48,27 @@ def evaluate(track: Track, raw: RawCandidate, label: str) -> Candidate:
                      label=f"{raw.bitrate}k" if raw.bitrate else "无损" if raw.format == "flac" else "未知音质"),
                      popularity=raw.popularity, score=round(score, 3), verdict=verdict, checks=checks,
                      flags=flags, preview_url="", web_url=raw.web_url, rank=0)
+
+
+def evaluate_candidates(track: Track, raws: list[RawCandidate], labels: dict[str, str]) -> list[Candidate]:
+    candidates = [evaluate(track, raw, labels[raw.provider]) for raw in raws]
+    if track.duration is None:
+        eligible = [c for c in candidates if c.duration is not None and all(c.checks[i].ok is True for i in (0, 1, 3))]
+        for i, candidate in enumerate(candidates):
+            if candidate in eligible and any(
+                    other.provider != candidate.provider and title_key(other.title) == title_key(candidate.title)
+                    and abs(other.duration - candidate.duration) <= tolerance(min(other.duration, candidate.duration))
+                    for other in eligible):
+                candidates[i] = evaluate(track, raws[i], labels[candidate.provider], duration_confirmed=True)
+    return candidates
+
+
+def same_recording(track: Track, chosen: Candidate, candidate: Candidate) -> bool:
+    return (title_key(candidate.title) == title_key(chosen.title)
+            and artists_match(track.artist, candidate.artist)
+            and set(candidate.flags) == set(chosen.flags) == set(track.flags)
+            and (chosen.duration is None or candidate.duration is None
+                 or abs(candidate.duration - chosen.duration) <= tolerance(chosen.duration)))
 
 
 def sort_candidates(candidates: list[Candidate], orders: dict[str, int]) -> list[Candidate]:

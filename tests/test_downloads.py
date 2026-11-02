@@ -17,17 +17,20 @@ def searched(service, duration=180):
     return result["track"], result["candidates"]
 
 
-def test_selected_failure_falls_back_only_to_match(service, monkeypatch):
-    track, candidates = searched(service)
-    matches = [c for c in candidates if c.verdict == "match"]
+@pytest.mark.parametrize("duration", [180, None])
+def test_selected_failure_falls_back_to_same_recording(service, monkeypatch, duration):
+    track, candidates = searched(service, duration)
+    matches = [c for c in candidates if c.checks[1].ok and c.duration == 180 and not c.flags]
     assert len(matches) == 1
     service.choose(track.id, matches[0].id)
     alternate = matches[0].model_copy(deep=True)
     alternate.id = 0
+    alternate.provider = "other"
     alternate.source_id = "alternate"
-    raw = service.db.raw_candidate(matches[0].id) | {"source_id": "alternate"}
+    service.providers["other"] = service.providers["mock"]
+    raw = service.db.raw_candidate(matches[0].id) | {"provider": "other", "source_id": "alternate"}
     import json
-    alternate.id = service.db.insert("candidates", alternate.model_dump(), track_id=track.id, provider="mock", source_id="alternate", raw=json.dumps(raw))
+    alternate.id = service.db.insert("candidates", alternate.model_dump(), track_id=track.id, provider="other", source_id="alternate", raw=json.dumps(raw))
     calls = []
     def download(target, raw, provider, playlist_name):
         calls.append(raw.source_id)
@@ -42,7 +45,7 @@ def test_selected_failure_falls_back_only_to_match(service, monkeypatch):
     assert result.chosen_by == "auto"
 
 
-def test_never_falls_back_to_review(service, monkeypatch):
+def test_never_falls_back_to_unrelated_review(service, monkeypatch):
     track, candidates = searched(service)
     calls = []
     def fail(target, raw, provider, playlist_name):
@@ -82,6 +85,23 @@ def test_full_decode_and_id3(tone, service):
     tags = mutagen.File(tone).tags
     assert str(tags["TIT2"]) == "晴天"
     assert str(tags["TXXX:SOURCE"]).startswith("provider=mock; id=")
+
+
+@pytest.mark.parametrize("mask, mode", [(0o022, 0o644), (0o002, 0o644), (0o027, 0o640), (0o077, 0o600)])
+def test_download_actual_quality_and_file_permissions(tone, service, monkeypatch, mask, mode):
+    import os
+    target, candidates = searched(service, 1)
+    raw = service.raw_candidate(candidates[0].id)
+    raw.provider = "vkeys_qq"
+    provider = service.providers["mock"]
+    monkeypatch.setattr(provider, "resolve", lambda raw: AudioSource(tone.as_uri(), local_path=str(tone), bitrate=319))
+    previous = os.umask(mask)
+    try:
+        result = service.downloader.download(target, raw, provider, "测试")
+    finally:
+        os.umask(previous)
+    assert result.bitrate == 128 and result.format == "mp3"
+    assert Path(result.path).stat().st_mode & 0o777 == mode
 
 
 def test_atomic_publish_duplicates_and_different_bytes(tmp_path, monkeypatch):

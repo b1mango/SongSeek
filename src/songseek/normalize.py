@@ -53,5 +53,15 @@ def artist_set(text: str) -> set[str]:
     return {key(part) for part in re.split(r"\s*(?:&|,|，|、|/|;|；|×|\bfeat(?:uring)?\.?(?![a-z])|\bft\.?(?![a-z]))\s*", normalized(text)) if key(part)}
 
 
+def artists_match(left: str, right: str) -> bool:
+    for a in artist_set(left):
+        for b in artist_set(right):
+            short, long = sorted((a, b), key=len)
+            if short == long or (short in long and (
+                    len(re.findall(r"[\u3400-\u9fff]", short)) >= 2 or re.fullmatch(r"[a-z]{3,}", short))):
+                return True
+    return False
+
+
 def tolerance(seconds: float) -> float:
     return 2 if seconds <= 60 else 3

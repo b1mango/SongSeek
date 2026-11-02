@@ -37,6 +37,29 @@ def test_query_explicit_and_unconfirmed():
     assert parse_query("Immortals Fall Out Boy", [wrong]) == ("Immortals Fall Out Boy", "")
 
 
+def test_query_infers_artist_alias():
+    raw = RawCandidate(provider="mock", source_id="a", title="光年之外", artist="G.E.M.邓紫棋")
+    assert parse_query("光年之外 邓紫棋", [raw]) == ("光年之外", "邓紫棋")
+
+
+def test_no_duration_consensus_auto_chooses_original_over_covers(service, monkeypatch):
+    other = MockProvider(service.config)
+    service.providers["other"] = other
+    service.config.providers.append(ProviderInfo(id="other", label="其他", max_quality="128k", order=1))
+    originals = [RawCandidate(provider=p, source_id="original", title="光年之外", artist="G.E.M.邓紫棋", duration=d, bitrate=128)
+                 for p, d in [("mock", 234), ("other", 235)]]
+    covers = [RawCandidate(provider=p, source_id=artist, title="光年之外", artist=artist, duration=234, bitrate=320)
+              for p in ("mock", "other") for artist in ("徐俊雅", "冯提莫", "陶心瑶")]
+    for provider_id, provider in service.providers.items():
+        monkeypatch.setattr(provider, "search", lambda *a, p=provider_id: [r for r in covers + originals if r.provider == p])
+    result = service.search_one("光年之外 邓紫棋")
+    target = result["track"]
+    assert target.duration is None and target.status == "matched" and target.chosen_by == "auto"
+    assert service.candidate(target.chosen_candidate_id).source_id == "original"
+    assert [c.verdict for c in result["candidates"]] == ["match", "match"] + ["review"] * 6
+    assert result["candidates"][0].checks[2].label == "多个音源时长一致 3:54"
+
+
 def test_single_search_prefers_provider_order(service, monkeypatch):
     other = MockProvider(service.config)
     service.providers["other"] = other

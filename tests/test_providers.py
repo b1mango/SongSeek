@@ -35,9 +35,11 @@ def test_qq_complete_title_and_link_validation():
     assert raw.title == "晴天 (Live)"
     link = {"code": 0, "data": {"songMID": "mid", "kbps": "320kbps", "url": "http://ws.stream.qqmusic.qq.com/a.mp3"}}
     assert vkeys_qq.parse_audio(link, raw).url.startswith("https://")
-    for change in [{"songMID": "other"}, {"kbps": "128kbps"}, {"url": "https://qqmusic.qq.com.example.org/a"}, {"url": "file:///tmp/a"}]:
+    for change in [{"songMID": "other"}, {"kbps": "0kbps"}, {"kbps": "unknown"}, {"url": "https://qqmusic.qq.com.example.org/a"}, {"url": "file:///tmp/a"}]:
         with pytest.raises(SongSeekError):
             vkeys_qq.parse_audio({"code": 0, "data": link["data"] | change}, raw)
+    for kbps, expected in [("319kbps", 319), ("319.5kbps", 320), ("128kbps", 128), ("999kbps", 999)]:
+        assert vkeys_qq.parse_audio({"code": 0, "data": link["data"] | {"kbps": kbps}}, raw).bitrate == expected
 
 
 def test_kugou_parsers():

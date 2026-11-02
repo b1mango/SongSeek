@@ -1,8 +1,8 @@
 import pytest
 
-from songseek.matching import evaluate, sort_candidates
+from songseek.matching import evaluate, evaluate_candidates, same_recording, sort_candidates
 from songseek.models import RawCandidate, Track, now
-from songseek.normalize import artist_set, version_flags
+from songseek.normalize import artist_set, artists_match, version_flags
 
 
 def track(title="晴天", artist="周杰伦", duration=180):
@@ -38,6 +38,58 @@ def test_artist_splitting_and_traditional():
     assert artist_set("甲 & 乙, 丙、丁/戊 feat. 己 × 庚;辛") == set("甲乙丙丁戊己庚辛")
     result = evaluate(track(title="後來", artist="劉若英 & 伍佰"), candidate(title="后来", artist="刘若英"), "演示")
     assert result.verdict == "match"
+
+
+@pytest.mark.parametrize("short, full", [("邓紫棋", "G.E.M.邓紫棋"), ("周杰伦", "Jay Chou 周杰倫"),
+                                       ("邓紫棋", "邓紫棋 (G.E.M.)"), ("陈奕迅", "陈奕迅 Eason Chan"), ("GEM", "G.E.M.邓紫棋")])
+def test_artist_aliases(short, full):
+    assert artists_match(short, full) and artists_match(full, short)
+    assert evaluate(track(artist=short), candidate(artist=full), "演示").verdict == "match"
+
+
+@pytest.mark.parametrize("left, right", [("林", "林俊杰"), ("Jo", "John"), ("邓紫棋", "冯提莫"), ("", "周杰伦")])
+def test_artist_aliases_do_not_match_short_or_other_names(left, right):
+    assert not artists_match(left, right)
+    assert not artists_match(right, left)
+
+
+@pytest.mark.parametrize("duration, other, provider, artist, title, confirmed", [
+    (234, 237, "other", "周杰伦", "晴天", True),
+    (234, 237.01, "other", "周杰伦", "晴天", False),
+    (60, 62, "other", "周杰伦", "晴天", True),
+    (60, 62.01, "other", "周杰伦", "晴天", False),
+    (234, 234, "mock", "周杰伦", "晴天", False),
+    (234, None, "other", "周杰伦", "晴天", False),
+    (234, 234, "other", "其他歌手", "晴天", False),
+    (234, 234, "other", "周杰伦", "晴天 Live", False),
+    (234, 234, "other", "周杰伦", "其他歌名", False),
+])
+def test_duration_consensus(duration, other, provider, artist, title, confirmed):
+    raws = [candidate(duration=duration), candidate(source_id="b", provider=provider, duration=other, artist=artist, title=title)]
+    results = evaluate_candidates(track(duration=None), raws, {"mock": "演示", "other": "其他"})
+    assert (results[0].verdict == "match") == confirmed
+    assert (results[0].checks[2].ok is True) == confirmed
+    if confirmed:
+        assert results[0].checks[2].label.startswith("多个音源时长一致 ")
+
+
+def test_consensus_preserves_explicit_duration_and_requires_artist_and_version():
+    raws = [candidate(duration=234), candidate(provider="other", duration=234)]
+    labels = {"mock": "演示", "other": "其他"}
+    for target in [track(duration=180), track(artist="", duration=None), track(title="晴天 Live", duration=None)]:
+        assert all(c.verdict != "match" for c in evaluate_candidates(target, raws, labels))
+
+
+@pytest.mark.parametrize("changes, allowed", [
+    ({"duration": 183}, True), ({"duration": 183.01}, False), ({"duration": None}, True),
+    ({"artist": "Jay Chou 周杰伦"}, True), ({"artist": "其他"}, False),
+    ({"title": "晴天 Live"}, False), ({"title": "其他"}, False),
+])
+def test_same_recording_uses_chosen_duration(changes, allowed):
+    target = track(duration=None)
+    chosen = evaluate(target, candidate(), "演示")
+    other = evaluate(target, candidate(**changes), "演示")
+    assert same_recording(target, chosen, other) == allowed
 
 
 @pytest.mark.parametrize("artist, duration", [("", 180), ("周杰伦", None), ("", None)])

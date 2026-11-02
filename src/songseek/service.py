@@ -14,7 +14,7 @@ from .downloader import Downloader, PreviewCache
 from .errors import SongSeekError, log_failure
 from .events import Broadcaster
 from .importers import parse_file, parse_text
-from .matching import evaluate, sort_candidates
+from .matching import evaluate, evaluate_candidates, same_recording, sort_candidates
 from .models import Candidate, Health, Job, ParsedRow, Playlist, RawCandidate, STATUSES, Track, now
 from .normalize import version_flags
 from .providers import create_providers
@@ -226,7 +226,7 @@ class Service:
             for candidate in self.candidates(track_id):
                 raw = self.raw_candidate(candidate.id)
                 found.setdefault((raw.provider, raw.source_id), raw)
-            ranked = sort_candidates([evaluate(track, raw, infos[raw.provider].label) for raw in found.values()], {p.id: p.order for p in self.config.providers})
+            ranked = sort_candidates(evaluate_candidates(track, list(found.values()), {p.id: p.label for p in self.config.providers}), {p.id: p.order for p in self.config.providers})
             with self.db.transaction() as connection:
                 for candidate in ranked:
                     raw = found[(candidate.provider, candidate.source_id)]
@@ -271,7 +271,8 @@ class Service:
             track.status, track.error = "downloading", None
             self.save_track(track)
             candidates = self.candidates(track_id)
-            choices = [self.candidate(track.chosen_candidate_id)] + [c for c in candidates if c.verdict == "match" and c.id != track.chosen_candidate_id]
+            chosen = self.candidate(track.chosen_candidate_id)
+            choices = [chosen] + [c for c in candidates if c.id != chosen.id and (c.verdict == "match" or same_recording(track, chosen, c))]
             errors = []
             for candidate in choices:
                 try:

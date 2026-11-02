@@ -1,3 +1,4 @@
+import re
 from urllib.parse import urlsplit
 
 import httpx
@@ -28,12 +29,13 @@ def parse_audio(data: dict, candidate: RawCandidate) -> AudioSource:
     if data.get("code") != 0 or not data.get("data"):
         raise SongSeekError("VKeys 取流失败", "provider_error")
     song = data["data"]
-    if song.get("songMID") != candidate.source_id or song.get("kbps") != "320kbps":
+    quality = re.fullmatch(r"(\d+(?:\.\d+)?)kbps", str(song.get("kbps", "")), re.IGNORECASE)
+    if song.get("songMID") != candidate.source_id or not quality or float(quality[1]) <= 0:
         raise SongSeekError("VKeys 返回的歌曲 ID 或音质不符", "provider_error")
     url = audio_url(song.get("url", ""))
     if not urlsplit(url).hostname.endswith(".qqmusic.qq.com"):
         raise SongSeekError("VKeys 未返回 QQ 音频地址", "provider_error")
-    return AudioSource(url=url.replace("http://", "https://", 1), headers={"Referer": "https://y.qq.com/"}, ext="mp3", bitrate=320)
+    return AudioSource(url=url.replace("http://", "https://", 1), headers={"Referer": "https://y.qq.com/"}, ext="mp3", bitrate=round(float(quality[1])))
 
 
 class VKeysQQProvider(BaseProvider):
