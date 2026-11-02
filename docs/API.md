@@ -42,6 +42,8 @@ interface DownloadedFile {
   bitrate: number | null;
   duration: number;       // ffprobe 实测
   sha256: string;
+  provider: string | null;        // 实际下载所用音源（可能是回退后的音源）
+  provider_label: string | null;
 }
 
 interface Track {

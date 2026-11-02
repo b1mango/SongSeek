@@ -313,7 +313,7 @@ function NextSteps({
 }
 
 function TrackRow({ t, checked, onCheck, onReveal }: { t: Track; checked: boolean; onCheck: () => void; onReveal: () => void }) {
-  const reviewable = t.candidate_count > 0;
+  const reviewable = t.candidate_count > 0 || t.status === "not_found";
   const go = () => reviewable && navigate({ page: "review", id: t.playlist_id, track: t.id });
   return (
     <tr className={`${checked ? "is-selected" : ""}${reviewable ? " is-clickable" : ""}`} onClick={go}>
@@ -341,10 +341,13 @@ function TrackRow({ t, checked, onCheck, onReveal }: { t: Track; checked: boolea
       </td>
       <td>
         {t.file ? (
-          <span className="mono small">
-            {t.file.format.toUpperCase()}
-            {t.file.bitrate ? ` · ${t.file.bitrate}k` : ""} · {fmtDuration(t.file.duration)}
-          </span>
+          <div className="src">
+            <span>{t.file.provider_label ?? "已下载"}</span>
+            <span className="mono small muted">
+              {t.file.format.toUpperCase()}
+              {t.file.bitrate ? ` · ${t.file.bitrate}k` : ""} · {fmtDuration(t.file.duration)}
+            </span>
+          </div>
         ) : t.best_score != null ? (
           <span className={`score tone-${toneOfScore(t.best_score)}`} title="最佳候选匹配分">
             {Math.round(t.best_score)}
@@ -365,7 +368,7 @@ function TrackRow({ t, checked, onCheck, onReveal }: { t: Track; checked: boolea
         )}
         {reviewable && !t.file && (
           <a className="link-btn" href={href({ page: "review", id: t.playlist_id, track: t.id })}>
-            候选 {t.candidate_count}
+            {t.candidate_count ? `候选 ${t.candidate_count}` : "换关键词搜"}
           </a>
         )}
       </td>

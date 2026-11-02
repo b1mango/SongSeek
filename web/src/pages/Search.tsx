@@ -88,6 +88,7 @@ export function SearchPage() {
               <div>
                 <b>已下载：{track.file.path.split("/").pop()}</b>
                 <span>
+                  {track.file.provider_label ? `${track.file.provider_label} · ` : ""}
                   {track.file.format.toUpperCase()}
                   {track.file.bitrate ? ` · ${track.file.bitrate}k` : ""} · {fmtDuration(track.file.duration)} · 已通过完整解码校验
                 </span>
@@ -157,7 +158,7 @@ export function SearchPage() {
                       <CheckChips checks={c.checks} only={["title", "artist", "version", "popularity"]} />
                     </td>
                     <td className="num">
-                      {c.id === track.chosen_candidate_id && track.status !== "failed" ? (
+                      {c.id === track.chosen_candidate_id && !["failed", "matched"].includes(track.status) ? (
                         <StatusBadge status={track.status} />
                       ) : (
                         <button className="btn btn-sm btn-choose" disabled={!!busy} onClick={() => download(c)}>

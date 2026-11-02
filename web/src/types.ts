@@ -31,6 +31,8 @@ export interface DownloadedFile {
   bitrate: number | null;
   duration: number;
   sha256: string;
+  provider: string | null;
+  provider_label: string | null;
 }
 
 export interface Track {

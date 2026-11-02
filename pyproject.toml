@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "songseek"
+version = "0.1.0"
+description = "觅音：本地多音源歌曲检索、审核与下载"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx[socks]>=0.27,<1",
+  "mutagen>=1.47,<2", "rapidfuzz>=3.9,<4", "openpyxl>=3.1,<4",
+  "pydantic>=2.7,<3",
+  "opencc-python-reimplemented>=0.1.7,<1", "python-multipart>=0.0.20,<1",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[project.scripts]
+songseek = "songseek.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

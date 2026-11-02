@@ -150,7 +150,7 @@ export function SettingsPage() {
           <label className="field">
             <span className="field-label">文件名模板</span>
             <input className="input mono" value={draft.filename_template} onChange={(e) => set("filename_template", e.target.value)} />
-            <span className="field-help">可用 {"{title}"} {"{artist}"} {"{album}"} {"{position}"}，扩展名自动补上。</span>
+            <span className="field-help">可用 {"{title}"} {"{artist}"} {"{album}"}，扩展名自动补上。</span>
           </label>
           <label className="check-line">
             <input type="checkbox" checked={draft.group_by_playlist} onChange={(e) => set("group_by_playlist", e.target.checked)} />

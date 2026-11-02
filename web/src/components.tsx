@@ -75,7 +75,10 @@ export function DurationRuler({
   highlight: number | null;
   onPick: (id: number) => void;
 }) {
-  const withDur = candidates.filter((c) => c.duration != null);
+  const timed = candidates.filter((c) => c.duration != null);
+  // Rejected candidates are collapsed in the table too; only plot them when nothing else is left.
+  const viable = timed.filter((c) => c.verdict !== "reject");
+  const withDur = viable.length ? viable : timed;
   if (!withDur.length) return null;
   const sorted = withDur.map((c) => c.duration!).sort((a, b) => a - b);
   const center = target ?? sorted[Math.floor(sorted.length / 2)];
@@ -85,22 +88,30 @@ export function DurationRuler({
   const pos = (d: number) => ((Math.min(Math.max(d, min), max) - min) / (max - min)) * 100;
   const tol = tolerance(center);
 
-  // Stack dots that would overlap.
+  // Stack overlapping dots, at most MAX_LANES high; the rest fold into a "+N" marker.
+  const MAX_LANES = 3;
   const lanes: number[][] = [];
-  const placed = withDur
-    .slice()
-    .sort((a, b) => a.rank - b.rank)
-    .map((c) => {
-      const x = pos(c.duration!);
-      let lane = 0;
-      while (lanes[lane]?.some((px) => Math.abs(px - x) < 3.2)) lane++;
-      (lanes[lane] ??= []).push(x);
-      return { c, x, lane, clipped: c.duration! < min ? "left" : c.duration! > max ? "right" : null };
-    });
+  const overflow = new Map<number, { x: number; n: number }>();
+  const placed: { c: Candidate; x: number; lane: number; clipped: "left" | "right" | null }[] = [];
+  for (const c of withDur.slice().sort((a, b) => a.rank - b.rank)) {
+    const x = pos(c.duration!);
+    let lane = 0;
+    while (lane < MAX_LANES && lanes[lane]?.some((px) => Math.abs(px - x) < 3.2)) lane++;
+    if (lane === MAX_LANES) {
+      const anchor = lanes[MAX_LANES - 1].find((px) => Math.abs(px - x) < 3.2)!;
+      const o = overflow.get(anchor) ?? { x: anchor, n: 0 };
+      o.n++;
+      overflow.set(anchor, o);
+      continue;
+    }
+    (lanes[lane] ??= []).push(x);
+    placed.push({ c, x, lane, clipped: c.duration! < min ? "left" : c.duration! > max ? "right" : null });
+  }
+  const height = 34 + Math.max(0, lanes.length - 1) * 22 + (overflow.size ? 16 : 0);
 
   return (
     <div className="ruler" aria-label="候选时长对比">
-      <div className="ruler-track" style={{ height: 34 + Math.max(0, lanes.length - 1) * 22 }}>
+      <div className="ruler-track" style={{ height }}>
         {target != null && (
           <>
             <div className="ruler-band warn" style={{ left: `${pos(center - 10)}%`, width: `${pos(center + 10) - pos(center - 10)}%` }} />
@@ -121,6 +132,11 @@ export function DurationRuler({
           >
             {clipped === "left" ? "‹" : clipped === "right" ? "›" : c.rank}
           </button>
+        ))}
+        {[...overflow.values()].map((o) => (
+          <span key={o.x} className="ruler-more mono" style={{ left: `${o.x}%`, bottom: 6 + MAX_LANES * 22 }}>
+            +{o.n}
+          </span>
         ))}
       </div>
       <div className="ruler-scale mono">
@@ -169,7 +185,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
 export function toneOfScore(score: number | null): Tone {
   if (score == null) return "idle";
-  if (score >= 80) return "ok";
+  if (score >= 90) return "ok";
   if (score >= 50) return "warn";
   return "bad";
 }
