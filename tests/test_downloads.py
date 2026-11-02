@@ -221,3 +221,32 @@ def test_repeated_download_errors_are_deduplicated(service, monkeypatch):
     result = service.download_track(target.id)
     assert result.status == "failed"
     assert "试了 2 个候选" in result.error and result.error.count("取流失败") == 1
+
+
+@pytest.mark.parametrize('failure', ['http', 'timeout', 'invalid', 'oversized', None])
+def test_cover_fetch_is_best_effort(tone, service, monkeypatch, failure):
+    target, candidates = searched(service, 1)
+    raw = service.raw_candidate(candidates[0].id)
+    raw.provider = 'vkeys_qq'
+    raw.extra['cover_url'] = 'https://cover.test/image'
+    provider = service.providers['mock']
+    monkeypatch.setattr(provider, 'resolve', lambda raw: AudioSource(tone.as_uri(), local_path=str(tone)))
+    cover = b'\xff\xd8\xff\xe0cover'
+    def handle(request):
+        if failure == 'timeout':
+            raise httpx.ReadTimeout('timeout', request=request)
+        if failure == 'http':
+            return httpx.Response(403)
+        if failure == 'invalid':
+            return httpx.Response(200, content=b'<html>no cover</html>')
+        if failure == 'oversized':
+            return httpx.Response(200, content=cover, headers={'content-length': str(6 * 1024 * 1024)})
+        return httpx.Response(200, content=cover)
+    monkeypatch.setattr(provider, 'client', lambda **kwargs: httpx.Client(transport=httpx.MockTransport(handle)))
+    result = service.downloader.download(target, raw, provider, '测试')
+    audio = mutagen.File(result.path)
+    assert str(audio.tags['TIT2']) == target.title
+    pictures = audio.tags.getall('APIC')
+    assert bool(pictures) == (failure is None)
+    if pictures:
+        assert pictures[0].data == cover

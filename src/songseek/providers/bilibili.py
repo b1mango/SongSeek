@@ -36,11 +36,15 @@ def parse_search(data: dict) -> list[RawCandidate]:
         if not video.get("bvid") or not video.get("duration"):
             continue
         title, artist = video_title(video["title"])
+        cover = video.get("pic") or ""
+        if cover.startswith("//"):
+            cover = "https:" + cover
         duration = sum(float(n) * 60 ** i for i, n in enumerate(reversed(str(video["duration"]).split(":"))))
         results.append(RawCandidate(provider="bilibili", source_id=video["bvid"], title=title, artist=artist,
                        duration=duration, format="m4a", bitrate=160,
                        popularity=min(1, video.get("play", 0) / 1000000),
-                       web_url=f"https://www.bilibili.com/video/{video['bvid']}", extra={"version_evidence": html.unescape(video["title"])}))
+                       web_url=f"https://www.bilibili.com/video/{video['bvid']}",
+                       extra={"version_evidence": html.unescape(video["title"]), "cover_url": cover}))
     return results
 
 

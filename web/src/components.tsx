@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
 import { Check, CircleHelp, X, CircleAlert, CircleCheck, Info } from "lucide-react";
 import { FLAG_LABEL, STATUS, fmtDelta, fmtDuration, tolerance, type Tone } from "./format";
+import { toggleLyricsPref, useStore } from "./store";
 import type { Candidate, CheckItem, LyricsInfo, TrackStatus, VersionFlag } from "./types";
 
 /* ---------------- status ---------------- */
@@ -206,5 +207,24 @@ export function LyricsTag({ info }: { info: LyricsInfo | null | undefined }) {
       {info.synced ? "LRC" : "词"}
       {info.translated ? <i>译</i> : null}
     </span>
+  );
+}
+
+/** "LRC" switch: lit means downloads also save the matching .lrc lyrics (the global setting). */
+export function LrcToggle({ compact = false }: { compact?: boolean }) {
+  const on = useStore((s) => s.lyricsPref);
+  const toast = useToast();
+  if (on === null) return null;
+  return (
+    <button
+      type="button"
+      className={`lrc-toggle${on ? " is-on" : ""}${compact ? " is-compact" : ""}`}
+      aria-pressed={on}
+      onClick={() => toggleLyricsPref().catch((e) => toast("bad", (e as Error).message))}
+      title={on ? "下载时一起保存 .lrc 歌词（点击关闭）" : "下载时不保存歌词（点击开启）"}
+    >
+      <span className="lrc-toggle-dot" aria-hidden />
+      LRC
+    </button>
   );
 }

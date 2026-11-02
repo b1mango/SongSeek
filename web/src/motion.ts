@@ -8,9 +8,10 @@ const reduced = () => typeof matchMedia !== "undefined" && matchMedia("(prefers-
  * they first appear (staggered) and glide to their new slot when the order changes.
  * Changing `resetKey` treats every row as new again (e.g. a fresh search).
  */
-export function useFlipList(container: RefObject<HTMLElement | null>, signature: string, resetKey?: unknown) {
+export function useFlipList(container: RefObject<HTMLElement | null>, signature: string, resetKey?: unknown, animateMount = true) {
   const positions = useRef(new Map<string, number>());
   const lastReset = useRef<unknown>(resetKey);
+  const mounted = useRef(animateMount);
 
   useLayoutEffect(() => {
     const root = container.current;
@@ -21,7 +22,9 @@ export function useFlipList(container: RefObject<HTMLElement | null>, signature:
     }
     const origin = root.getBoundingClientRect().top;
     const next = new Map<string, number>();
-    const skip = reduced();
+    // Rows already on screen when the page mounts (e.g. restored results) just appear.
+    const skip = reduced() || !mounted.current;
+    mounted.current = true;
     let fresh = 0;
     root.querySelectorAll<HTMLElement>("[data-flip]").forEach((node) => {
       const key = node.dataset.flip!;

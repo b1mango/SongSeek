@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Activity, KeyRound, LoaderCircle, Save } from "lucide-react";
 import { api } from "../api";
 import { useToast } from "../components";
+import { setLyricsPref } from "../store";
 import type { Provider, Settings } from "../types";
 
 export function SettingsPage() {
@@ -62,6 +63,7 @@ export function SettingsPage() {
       const s = await api.saveSettings({ ...patch, ...extra });
       setSettings(s);
       setDraft(s);
+      setLyricsPref(s.lyrics ?? true);
       setCookie("");
       toast("ok", "设置已保存");
     } catch (e) {

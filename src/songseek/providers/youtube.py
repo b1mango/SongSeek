@@ -18,7 +18,9 @@ def parse_search(data: dict) -> list[RawCandidate]:
         results.append(RawCandidate(provider="youtube", source_id=entry["id"], title=title, artist=artist,
                                    album=entry.get("album") or "", duration=entry.get("duration"), format="m4a",
                                    popularity=min(1, (entry.get("view_count") or 0) / 10000000),
-                                   web_url="https://www.youtube.com/watch?v=" + entry["id"], extra={"version_evidence": entry["title"]}))
+                                   web_url="https://www.youtube.com/watch?v=" + entry["id"],
+                                   extra={"version_evidence": entry["title"],
+                                          "cover_url": entry.get("thumbnail") or f"https://i.ytimg.com/vi/{entry['id']}/hqdefault.jpg"}))
     return results
 
 

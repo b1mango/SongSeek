@@ -15,7 +15,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { api } from "../api";
-import { Flags, LyricsTag, StatusBadge, toneOfScore, useToast } from "../components";
+import { Flags, LrcToggle, LyricsTag, StatusBadge, toneOfScore, useToast } from "../components";
 import { fmtDuration } from "../format";
 import { PlayButton } from "../player";
 import { href, navigate } from "../router";
@@ -133,6 +133,7 @@ export function PlaylistPage({ id }: { id: number }) {
           </p>
         </div>
         <div className="row gap-8">
+          <LrcToggle />
           {c.done > 0 && (
             <button className="btn" disabled={busy === "lyrics"} onClick={fillLyrics} title="给已下载但还没有歌词的歌补上 .lrc 歌词">
               {busy === "lyrics" ? <LoaderCircle className="spin" size={16} /> : <ScrollText size={16} />} 补歌词
@@ -372,7 +373,7 @@ function TrackRow({ t, checked, onCheck, onReveal }: { t: Track; checked: boolea
       <td className="num row-actions" onClick={(e) => e.stopPropagation()}>
         {t.file && (
           <>
-            <PlayButton playable={{ key: `t:${t.id}`, url: api.audioUrl(t.id), title: t.title, subtitle: `${t.artist} · 已下载`, lyricsUrl: api.trackLyricsUrl(t.id) }} size={28} />
+            <PlayButton playable={{ key: `t:${t.id}`, url: api.audioUrl(t.id), title: t.title, subtitle: `${t.artist} · 已下载`, lyricsUrl: api.trackLyricsUrl(t.id), coverUrl: api.trackCoverUrl(t.id) }} size={28} />
             <button className="icon-btn" onClick={onReveal} aria-label="在文件夹中显示" title="在文件夹中显示">
               <FolderOpen size={15} />
             </button>

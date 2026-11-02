@@ -1,95 +1,34 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, CircleAlert, Crown, Download, FolderOpen, LoaderCircle, ScrollText, Search, X } from "lucide-react";
-import { api, ApiError, type SearchEvent } from "../api";
-import { CheckChips, Flags, LyricsTag, StatusBadge, useToast } from "../components";
+import { api } from "../api";
+import { CheckChips, Flags, LrcToggle, LyricsTag, StatusBadge, useToast } from "../components";
 import { fmtDuration } from "../format";
 import { useFlipList } from "../motion";
 import { PlayButton } from "../player";
 import { href } from "../router";
-import { onEvent, upsertJob } from "../store";
-import type { Candidate, Track } from "../types";
-
-interface SourceState {
-  id: string;
-  label: string;
-  state: "pending" | "ok" | "error";
-  error?: string | null;
-}
+import { searchActions, useSearch, type SourceState } from "../searchStore";
+import { upsertJob } from "../store";
+import type { Candidate } from "../types";
 
 export function SearchPage() {
   const toast = useToast();
-  const [query, setQuery] = useState("");
-  const [dur, setDur] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [session, setSession] = useState(0);
-  const [track, setTrack] = useState<Track | null>(null);
-  const [cands, setCands] = useState<Candidate[]>([]);
-  const [sources, setSources] = useState<SourceState[]>([]);
-  const [startedAt, setStartedAt] = useState(0);
-  const [showRejected, setShowRejected] = useState(false);
+  const { query, dur, loading, session, track, cands, sources, startedAt, elapsed, showRejected, error } = useSearch();
   const [lyricsBusy, setLyricsBusy] = useState(false);
-  const abort = useRef<AbortController | null>(null);
   const body = useRef<HTMLTableSectionElement | null>(null);
+  const setTrack = searchActions.setTrack;
 
-  useEffect(
-    () =>
-      onEvent("track", (t) => {
-        setTrack((cur) => (cur && cur.id === t.id ? t : cur));
-      }),
-    [],
-  );
-  useEffect(() => () => abort.current?.abort(), []);
+  useEffect(() => {
+    if (track && ["queued", "downloading"].includes(track.status)) searchActions.refreshTrack().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  async function search() {
-    const m = dur.trim().match(/^(\d+):(\d{1,2})$/);
-    const seconds = m ? Number(m[1]) * 60 + Number(m[2]) : dur.trim() ? Number(dur) : undefined;
-    const duration = seconds && isFinite(seconds) ? seconds : undefined;
-    abort.current?.abort();
-    const controller = new AbortController();
-    abort.current = controller;
-    setLoading(true);
-    setShowRejected(false);
-    setSession((n) => n + 1);
-    setTrack(null);
-    setCands([]);
-    setSources([]);
-    setStartedAt(performance.now());
+  useEffect(() => {
+    if (!error) return;
+    toast("bad", error);
+    searchActions.clearError();
+  }, [error, toast]);
 
-    const handle = (event: SearchEvent) => {
-      if (controller.signal.aborted) return;
-      if (event.type === "start") {
-        setSources(event.providers.map((p) => ({ ...p, state: "pending" })));
-      } else if (event.type === "progress") {
-        setCands(event.candidates);
-        setSources((list) => {
-          const known = list.some((s) => s.id === event.provider);
-          const next: SourceState = { id: event.provider, label: event.label, state: event.ok ? "ok" : "error", error: event.error };
-          return known ? list.map((s) => (s.id === event.provider ? next : s)) : [...list, next];
-        });
-      } else if (event.type === "done") {
-        setTrack(event.track);
-        setCands(event.candidates);
-        setSources((list) => list.map((s) => (s.state === "pending" ? { ...s, state: "error", error: "搜索超时" } : s)));
-      } else {
-        toast("bad", event.message);
-      }
-    };
-
-    try {
-      try {
-        await api.searchStream(query.trim(), duration, handle, controller.signal);
-      } catch (error) {
-        // Older server without the streaming endpoint: fall back to the one-shot search.
-        if (!(error instanceof ApiError) || error.code !== "no_stream") throw error;
-        const r = await api.searchOne(query.trim(), duration);
-        handle({ type: "done", track: r.track, candidates: r.candidates });
-      }
-    } catch (e) {
-      if ((e as Error).name !== "AbortError") toast("bad", (e as Error).message);
-    } finally {
-      if (abort.current === controller) setLoading(false);
-    }
-  }
+  const search = searchActions.run;
 
   async function download(c: Candidate) {
     if (!track) return;
@@ -122,7 +61,7 @@ export function SearchPage() {
   const shown = showRejected ? cands : viable;
   const busy = track && ["queued", "downloading"].includes(track.status);
   const searching = loading && !track;
-  useFlipList(body, shown.map((c) => c.id).join(","), session);
+  useFlipList(body, shown.map((c) => c.id).join(","), session, false);
 
   return (
     <div className="page">
@@ -141,14 +80,14 @@ export function SearchPage() {
         }}
       >
         <Search size={20} aria-hidden />
-        <input className="input bare grow" placeholder="例如：晴天 周杰伦" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus />
-        <input className="input bare mono w-90" placeholder="时长 可选" value={dur} onChange={(e) => setDur(e.target.value)} aria-label="时长（可选）" title="填了时长会更准，例如 4:29" />
+        <input className="input bare grow" placeholder="例如：晴天 周杰伦" value={query} onChange={(e) => searchActions.setQuery(e.target.value)} autoFocus />
+        <input className="input bare mono w-90" placeholder="时长 可选" value={dur} onChange={(e) => searchActions.setDur(e.target.value)} aria-label="时长（可选）" title="填了时长会更准，例如 4:29" />
         <button className="btn btn-primary" disabled={!query.trim()}>
           {loading ? <LoaderCircle className="spin" size={16} /> : null} 搜索
         </button>
       </form>
 
-      {sources.length > 0 && <SourceStrip sources={sources} startedAt={startedAt} done={!loading} />}
+      {sources.length > 0 && <SourceStrip sources={sources} startedAt={startedAt} elapsed={elapsed} done={!loading} />}
 
       {(track || cands.length > 0 || searching) && (
         <section className="stack gap-12">
@@ -165,7 +104,7 @@ export function SearchPage() {
                 </span>
               </div>
               <div className="row gap-8 end">
-                <PlayButton playable={{ key: `t:${track.id}`, url: api.audioUrl(track.id), title: track.title, subtitle: "已下载", lyricsUrl: api.trackLyricsUrl(track.id) }} />
+                <PlayButton playable={{ key: `t:${track.id}`, url: api.audioUrl(track.id), title: track.title, subtitle: `${track.artist} · 已下载`, lyricsUrl: api.trackLyricsUrl(track.id), coverUrl: api.trackCoverUrl(track.id) }} />
                 {(!track.file.lyrics || track.file.lyrics.error || (!track.file.lyrics.path && !track.file.lyrics.embedded)) && (
                   <button className="btn btn-sm" disabled={lyricsBusy} onClick={fillLyrics} title="重新查找并保存这首歌的歌词">
                     {lyricsBusy ? <LoaderCircle className="spin" size={14} /> : <ScrollText size={14} />} 补歌词
@@ -203,14 +142,16 @@ export function SearchPage() {
                   <th>来源</th>
                   <th className="num">时长</th>
                   <th>检查</th>
-                  <th aria-label="下载" />
+                  <th className="num">
+                    <LrcToggle compact />
+                  </th>
                 </tr>
               </thead>
               <tbody ref={body}>
                 {shown.map((c) => (
                   <tr key={c.id} data-flip={c.id} className={`cand v-${c.verdict}${track && c.id === track.chosen_candidate_id ? " is-chosen" : ""}`}>
                     <td>
-                      <PlayButton playable={{ key: `c:${c.id}`, url: c.preview_url, title: c.title, subtitle: c.needs_member ? `${c.provider_label}需会员 · 已换其他音源同版本试听` : `${c.artist} · ${c.provider_label} 试听`, lyricsUrl: api.candidateLyricsUrl(c.id) }} />
+                      <PlayButton playable={{ key: `c:${c.id}`, url: c.preview_url, title: c.title, subtitle: c.needs_member ? `${c.provider_label}需会员 · 已换其他音源同版本试听` : `${c.artist} · ${c.provider_label} 试听`, lyricsUrl: api.candidateLyricsUrl(c.id), coverUrl: api.candidateCoverUrl(c.id) }} />
                     </td>
                     <td>
                       <div className="song">
@@ -265,7 +206,7 @@ export function SearchPage() {
             )}
             {rejected.length > 0 && (
               <div className="table-more">
-                <button className="link-btn" onClick={() => setShowRejected((v) => !v)}>
+                <button className="link-btn" onClick={searchActions.toggleRejected}>
                   {showRejected ? "隐藏" : "显示"}被排除的 {rejected.length} 个结果（Live、伴奏、DJ 等其他版本）
                 </button>
               </div>
@@ -282,7 +223,7 @@ export function SearchPage() {
   );
 }
 
-function SourceStrip({ sources, startedAt, done }: { sources: SourceState[]; startedAt: number; done: boolean }) {
+function SourceStrip({ sources, startedAt, elapsed, done }: { sources: SourceState[]; startedAt: number; elapsed: number | null; done: boolean }) {
   const [now, setNow] = useState(performance.now());
   useEffect(() => {
     if (done) return;
@@ -293,7 +234,8 @@ function SourceStrip({ sources, startedAt, done }: { sources: SourceState[]; sta
   return (
     <div className="source-strip" aria-live="polite">
       <span className="source-strip-head mono">
-        {done ? "完成" : `${finished}/${sources.length}`} · {((Math.max(now, startedAt) - startedAt) / 1000).toFixed(1)}s
+        {done ? "完成" : `${finished}/${sources.length}`}
+        {done ? (elapsed != null ? ` · ${elapsed.toFixed(1)}s` : "") : ` · ${((Math.max(now, startedAt) - startedAt) / 1000).toFixed(1)}s`}
       </span>
       {sources.map((s) => (
         <span key={s.id} className={`source-pill is-${s.state}`} title={s.error ?? undefined}>

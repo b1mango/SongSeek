@@ -9,11 +9,15 @@ from .base import BaseProvider, audio_url
 
 
 def parse_song(song: dict) -> RawCandidate:
+    cover = song.get("cover") or song.get("pic")
+    album_mid = song.get("albumMID") or song.get("albummid")
+    if not cover and album_mid:
+        cover = f"https://y.gtimg.cn/music/photo_new/T002R500x500M000{album_mid}.jpg"
     # QQ 的 name 会省略 Live 等后缀，必须优先完整 title。
     return RawCandidate(provider="vkeys_qq", source_id=song["songMID"],
                         title=song["title"], artist=song["singer"], album=song.get("album", ""),
                         duration=song.get("interval") or None, bitrate=320,
-                        web_url=f"https://y.qq.com/n/ryqq/songDetail/{song['songMID']}")
+                        web_url=f"https://y.qq.com/n/ryqq/songDetail/{song['songMID']}", extra={"cover_url": cover})
 
 
 def parse_search(data: dict) -> list[RawCandidate]:

@@ -10,6 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .config import Config
+from .covers import CoverManager
 from .db import Database
 from .downloader import Downloader, PreviewCache
 from .errors import SongSeekError, log_failure, public_error
@@ -37,6 +38,7 @@ class Service:
         self.downloader = Downloader(self.config)
         self.previews = PreviewCache(self.config)
         self.lyrics = LyricsManager(self)
+        self.covers = CoverManager(self)
         self._locks_guard = threading.Lock()
         self._locks: dict[int, threading.RLock] = {}
         self._recover()

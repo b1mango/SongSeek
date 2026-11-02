@@ -14,7 +14,9 @@ def parse_search(data: dict) -> list[RawCandidate]:
     return [RawCandidate(provider="kugou", source_id=song["FileHash"], title=html.unescape(song["SongName"]),
                          artist=html.unescape(song["SingerName"]), album=song.get("AlbumName", ""),
                          duration=song.get("Duration") or None, bitrate=128,
-                         web_url=f"https://www.kugou.com/song/#hash={song['FileHash']}", extra={"album_id": song.get("AlbumID", "")})
+                         web_url=f"https://www.kugou.com/song/#hash={song['FileHash']}",
+                         extra={"album_id": song.get("AlbumID", ""),
+                                "cover_url": (song.get("AlbumImage") or song.get("Image") or song.get("imgUrl") or song.get("album_img") or "").replace("{size}", "480")})
             for song in data.get("data", {}).get("lists", [])]
 
 

@@ -24,9 +24,10 @@ interface State {
   playlists: Playlist[];
   jobs: Job[];
   connected: boolean;
+  lyricsPref: boolean | null; // settings.lyrics: save .lrc alongside downloads (null until loaded)
 }
 
-let state: State = { playlists: [], jobs: [], connected: false };
+let state: State = { playlists: [], jobs: [], connected: false, lyricsPref: null };
 const listeners = new Set<() => void>();
 
 function set(patch: Partial<State>) {
@@ -60,6 +61,22 @@ export function upsertJob(j: Job) {
   set({ jobs: [j, ...others].sort((a, b) => b.id - a.id).slice(0, 20) });
 }
 
+export function setLyricsPref(on: boolean) {
+  set({ lyricsPref: on });
+}
+
+/** Flip the "download lyrics too" switch; optimistic, rolls back if the save fails. */
+export async function toggleLyricsPref() {
+  const next = !(state.lyricsPref ?? true);
+  set({ lyricsPref: next });
+  try {
+    set({ lyricsPref: (await api.saveSettings({ lyrics: next })).lyrics ?? next });
+  } catch (e) {
+    set({ lyricsPref: !next });
+    throw e;
+  }
+}
+
 export async function refreshPlaylists() {
   set({ playlists: await api.playlists() });
 }
@@ -74,6 +91,7 @@ function connect() {
     // Catch up on whatever changed while disconnected.
     refreshPlaylists().catch(() => {});
     api.jobs().then((jobs) => set({ jobs })).catch(() => {});
+    api.settings().then((s) => set({ lyricsPref: s.lyrics ?? true })).catch(() => {});
   };
   source.onerror = () => set({ connected: false });
   for (const type of Object.keys(handlers) as (keyof EventMap)[]) {

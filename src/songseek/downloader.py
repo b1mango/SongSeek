@@ -23,6 +23,7 @@ from mutagen.oggvorbis import OggVorbis
 from mutagen.wave import WAVE
 
 from .config import Config
+from .covers import fetch_cover, image_type
 from .errors import SongSeekError
 from .models import AudioSource, DownloadedFile, RawCandidate, Track
 from .normalize import tolerance
@@ -121,10 +122,10 @@ def tag(path: Path, track: Track, raw: RawCandidate, cover: bytes | None = None)
         audio.add_tags()
     title, artist, album = track.title, track.artist or raw.artist, track.album or raw.album
     source = f"provider={raw.provider}; id={raw.source_id}"
-    mime = "image/png" if cover and cover.startswith(b"\x89PNG") else "image/jpeg"
+    mime = image_type(cover) if cover else "image/jpeg"
     if isinstance(audio, MP4):
         audio["\xa9nam"], audio["\xa9ART"], audio["\xa9alb"], audio["\xa9cmt"] = [title], [artist], [album], [source]
-        if cover:
+        if cover and mime in ("image/jpeg", "image/png"):
             audio["covr"] = [MP4Cover(cover, imageformat=MP4Cover.FORMAT_PNG if mime == "image/png" else MP4Cover.FORMAT_JPEG)]
     elif isinstance(audio.tags, mutagen.id3.ID3):
         audio.tags.add(TIT2(encoding=3, text=title))
@@ -212,17 +213,9 @@ class Downloader:
             info = verify(partial, track.duration if track.duration is not None else raw.duration)
             cover = None
             if raw.extra.get("cover_url"):
-                with provider.semaphore, provider.client() as client:
-                    with client.stream("GET", audio_url(raw.extra["cover_url"])) as response:
-                        response.raise_for_status()
-                        chunks = bytearray()
-                        for chunk in response.iter_bytes(65536):
-                            chunks.extend(chunk)
-                            if len(chunks) > 10 * 1024 * 1024:
-                                raise SongSeekError("封面文件过大", "invalid_cover")
-                        if not chunks.startswith((b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")):
-                            raise SongSeekError("封面不是有效的 JPEG 或 PNG", "invalid_cover")
-                        cover = bytes(chunks)
+                result = fetch_cover(raw.extra["cover_url"], provider)
+                if result is not None:
+                    cover = result[0]
             tag(partial, track, raw, cover)
             filename = safe_name(settings.filename_template.format(artist=track.artist or raw.artist, title=track.title, album=track.album or raw.album))
             target = publish(partial, directory / f"{filename}.{info['format']}")

@@ -2438,3 +2438,655 @@ html.lyrics-open .page {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* LRC switch: lit = save lyrics with downloads */
+.lrc-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px 0 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+  background: var(--sleeve);
+  color: var(--ink-3);
+  font: 600 12px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition:
+    background 0.22s var(--ease-out),
+    color 0.22s var(--ease-out),
+    border-color 0.22s var(--ease-out),
+    box-shadow 0.3s var(--ease-out),
+    transform 0.12s var(--ease-out);
+}
+.lrc-toggle:hover {
+  color: var(--ink-2);
+  border-color: var(--ink-3);
+}
+.lrc-toggle:active {
+  transform: scale(0.94);
+}
+.lrc-toggle-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--rule-strong);
+  transition:
+    background 0.22s var(--ease-out),
+    box-shadow 0.3s var(--ease-out);
+}
+.lrc-toggle.is-on {
+  color: var(--label-ink);
+  background: var(--label);
+  border-color: var(--label);
+  box-shadow:
+    0 0 0 3px var(--label-soft),
+    0 4px 14px -4px color-mix(in srgb, var(--label) 70%, transparent);
+}
+.lrc-toggle.is-on .lrc-toggle-dot {
+  background: var(--label-ink);
+  box-shadow: 0 0 6px 1px color-mix(in srgb, var(--label-ink) 80%, transparent);
+}
+.lrc-toggle.is-compact {
+  height: 24px;
+  padding: 0 9px 0 7px;
+  font-size: 10.5px;
+  gap: 5px;
+}
+.lrc-toggle.is-compact .lrc-toggle-dot {
+  width: 6px;
+  height: 6px;
+}
+.lrc-toggle.is-compact.is-on {
+  box-shadow:
+    0 0 0 2px var(--label-soft),
+    0 3px 10px -3px color-mix(in srgb, var(--label) 70%, transparent);
+}
+
+/* ---------- mini player: cover on the vinyl label, hint to open the full page ---------- */
+.disc-label[data-cover] {
+  inset: 22%;
+  background-size: cover;
+  background-position: center;
+}
+.disc-label[data-cover]::after {
+  content: "";
+  position: absolute;
+  inset: 42%;
+  border-radius: 50%;
+  background: #14110d;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+.disc-hint {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  color: #fff;
+  opacity: 0;
+  transform: scale(0.7);
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.7));
+  transition:
+    opacity 0.18s var(--ease-out),
+    transform 0.25s var(--ease-spring);
+  pointer-events: none;
+}
+.disc:hover .disc-hint,
+.disc:focus-visible .disc-hint {
+  opacity: 1;
+  transform: scale(1);
+}
+.disc:hover .disc-label {
+  filter: brightness(0.55);
+}
+
+/* ---------- full-screen now playing ---------- */
+html.np-open,
+html.np-open body {
+  overflow: hidden;
+}
+.np {
+  --np-fg: #fff;
+  --np-dim: rgba(255, 255, 255, 0.62);
+  --np-faint: rgba(255, 255, 255, 0.2);
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  color: var(--np-fg);
+  background: #17130f;
+  outline: none;
+  overflow: hidden;
+  animation: np-in 0.52s var(--ease-out) both;
+}
+.np.is-leaving {
+  animation: np-out 0.38s cubic-bezier(0.5, 0, 0.75, 0) both;
+}
+@keyframes np-in {
+  from {
+    opacity: 0;
+    transform: translateY(6%) scale(0.98);
+    border-radius: 28px;
+  }
+}
+@keyframes np-out {
+  to {
+    opacity: 0;
+    transform: translateY(8%) scale(0.98);
+    border-radius: 28px;
+  }
+}
+
+/* background: two drifting, heavily blurred copies of the cover */
+.np-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.np-bg-art {
+  position: absolute;
+  width: 120vmax;
+  height: 120vmax;
+  background-size: cover;
+  background-position: center;
+  filter: blur(90px) saturate(1.7) brightness(0.8);
+  opacity: 0.9;
+  will-change: transform;
+}
+.np-bg-art.a {
+  left: -35vmax;
+  top: -45vmax;
+  animation: np-drift-a 38s ease-in-out infinite alternate;
+}
+.np-bg-art.b {
+  right: -45vmax;
+  bottom: -55vmax;
+  transform: rotate(180deg);
+  animation: np-drift-b 46s ease-in-out infinite alternate;
+}
+@keyframes np-drift-a {
+  to {
+    transform: translate(18vmax, 10vmax) rotate(40deg) scale(1.1);
+  }
+}
+@keyframes np-drift-b {
+  to {
+    transform: translate(-14vmax, -12vmax) rotate(140deg) scale(1.15);
+  }
+}
+/* no cover: warm record-shop glow in the app's own colours */
+.np-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.75;
+}
+.np-blob.a {
+  width: 70vmax;
+  height: 70vmax;
+  left: -20vmax;
+  top: -25vmax;
+  background: #8a3a22;
+  animation: np-drift-a 30s ease-in-out infinite alternate;
+}
+.np-blob.b {
+  width: 60vmax;
+  height: 60vmax;
+  right: -18vmax;
+  bottom: -22vmax;
+  background: #3b5a52;
+  animation: np-drift-b 36s ease-in-out infinite alternate;
+}
+.np-blob.c {
+  width: 40vmax;
+  height: 40vmax;
+  left: 35vw;
+  top: 30vh;
+  background: #a8742c;
+  opacity: 0.4;
+  animation: np-drift-a 44s ease-in-out infinite alternate-reverse;
+}
+.np-bg-shade {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 90% at 25% 50%, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.25) 100%),
+    linear-gradient(rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.32));
+}
+
+.np-top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px 0;
+}
+.np-icon {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--np-fg);
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.82;
+  transition:
+    background 0.18s,
+    opacity 0.18s,
+    transform 0.15s var(--ease-out);
+}
+.np-icon:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.12);
+}
+.np-icon:active {
+  transform: scale(0.9);
+}
+.np-icon:disabled {
+  opacity: 0.3;
+  cursor: default;
+  background: transparent;
+}
+.np-top > .np-icon {
+  background: rgba(255, 255, 255, 0.1);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+}
+.np-volume {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 14px 0 4px;
+  height: 40px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+}
+.np-volume .np-icon {
+  width: 34px;
+  height: 34px;
+}
+.np-volume-range {
+  width: 110px;
+}
+
+.np-main {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(300px, 0.9fr) minmax(0, 1.1fr);
+  align-items: center;
+  gap: clamp(32px, 6vw, 96px);
+  padding: 0 clamp(28px, 6vw, 96px);
+}
+.np.no-lyrics .np-main {
+  grid-template-columns: minmax(300px, 420px);
+  justify-content: center;
+}
+
+.np-left {
+  justify-self: end;
+  width: min(100%, 420px, 52vh);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  animation: np-rise 0.6s 0.08s var(--ease-out) both;
+}
+.np.no-lyrics .np-left {
+  justify-self: center;
+}
+@keyframes np-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+}
+.np-cover {
+  aspect-ratio: 1;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow:
+    0 30px 60px -20px rgba(0, 0, 0, 0.6),
+    0 10px 24px -8px rgba(0, 0, 0, 0.35);
+  transform: scale(0.86);
+  transition:
+    transform 0.6s var(--ease-spring),
+    box-shadow 0.6s var(--ease-out);
+}
+.np.is-playing .np-cover {
+  transform: none;
+  box-shadow:
+    0 40px 80px -24px rgba(0, 0, 0, 0.7),
+    0 14px 30px -10px rgba(0, 0, 0, 0.4);
+}
+.np-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.np-cover.is-vinyl {
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.np-vinyl {
+  position: relative;
+  width: 84%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background:
+    conic-gradient(from 20deg, transparent 0 8%, rgba(255, 255, 255, 0.12) 13%, transparent 19% 58%, rgba(255, 255, 255, 0.07) 63%, transparent 69%),
+    repeating-radial-gradient(circle, #110f0b 0 2px, #231f19 2px 4px);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 24px 50px -12px rgba(0, 0, 0, 0.6);
+  animation: disc-spin 9s linear infinite;
+  animation-play-state: paused;
+}
+.np-vinyl::before {
+  content: "";
+  position: absolute;
+  inset: 33%;
+  border-radius: 50%;
+  background: conic-gradient(var(--label) 0 72%, color-mix(in srgb, var(--label) 65%, #fff) 72% 100%);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2);
+}
+.np-vinyl::after {
+  content: "";
+  position: absolute;
+  inset: 48.5%;
+  border-radius: 50%;
+  background: #14110d;
+}
+.np-vinyl.is-spinning {
+  animation-play-state: running;
+}
+
+.np-meta {
+  min-width: 0;
+}
+.np-meta h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.np-meta p {
+  margin: 4px 0 0;
+  color: var(--np-dim);
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.np-meta p.is-error {
+  color: #ffb4a3;
+  white-space: normal;
+}
+
+.np-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.np-seek {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.np-seek::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(to right, rgba(255, 255, 255, 0.9) 0 var(--p, 0%), var(--np-faint) var(--p, 0%) 100%);
+  transition: height 0.2s var(--ease-out);
+}
+.np-seek::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transform: scale(0.5);
+  transition:
+    opacity 0.2s,
+    transform 0.25s var(--ease-spring);
+}
+.np-seek:hover::-webkit-slider-thumb,
+.np-seek:focus-visible::-webkit-slider-thumb {
+  opacity: 1;
+  transform: none;
+}
+.np-seek::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--np-faint);
+}
+.np-seek::-moz-range-progress {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.9);
+}
+.np-seek::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+}
+.np-seek:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.np-volume-range::-webkit-slider-runnable-track {
+  height: 4px;
+}
+.np-volume-range::-webkit-slider-thumb {
+  margin-top: -5px;
+}
+.np-times {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: var(--np-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.np-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 36px;
+  margin-top: 2px;
+}
+.np-skip {
+  width: 48px;
+  height: 48px;
+}
+.np-skip small {
+  position: absolute;
+  font: 700 8.5px/1 var(--font);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -38%);
+}
+.np-play {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  border: 0;
+  border-radius: 50%;
+  color: #17130f;
+  background: #fff;
+  cursor: pointer;
+  box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.5);
+  transition:
+    transform 0.2s var(--ease-spring),
+    box-shadow 0.2s;
+}
+.np-play:hover {
+  transform: scale(1.05);
+}
+.np-play:active {
+  transform: scale(0.93);
+}
+.np-play .nudge {
+  margin-left: 4px;
+}
+
+/* lyrics */
+.np-lyrics {
+  align-self: stretch;
+  min-width: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding-right: 8px;
+  -webkit-mask: linear-gradient(transparent, #000 18%, #000 78%, transparent);
+  mask: linear-gradient(transparent, #000 18%, #000 78%, transparent);
+  animation: np-rise 0.7s 0.16s var(--ease-out) both;
+}
+.np-lyrics::-webkit-scrollbar {
+  display: none;
+}
+.np-lyrics-pad {
+  height: 50vh;
+}
+.np-lyrics-pad.top {
+  height: 38vh;
+}
+.np-line {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 14px;
+  text-align: left;
+  color: var(--np-fg);
+  background: transparent;
+  font: 700 clamp(22px, 2.5vw, 34px) / 1.32 var(--font);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  opacity: 0.32;
+  filter: blur(calc(var(--d, 0) * 0.7px));
+  transform-origin: left center;
+  transform: scale(0.96);
+  transition:
+    opacity 0.5s var(--ease-out),
+    filter 0.5s var(--ease-out),
+    transform 0.6s var(--ease-spring),
+    background 0.2s;
+}
+.np-line small {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.56em;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.np-line:hover {
+  background: rgba(255, 255, 255, 0.08);
+  opacity: 0.6;
+  filter: none;
+}
+.np-line.is-active {
+  opacity: 1;
+  filter: none;
+  transform: none;
+}
+.np-line.is-active .np-line-text {
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    #fff 0,
+    #fff calc(var(--sweep, 0%) - 6%),
+    rgba(255, 255, 255, 0.5) calc(var(--sweep, 0%) + 6%),
+    rgba(255, 255, 255, 0.5) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-box-decoration-break: slice;
+  box-decoration-break: slice;
+}
+.np-lyrics.is-browsing .np-line {
+  filter: none;
+  opacity: 0.55;
+}
+.np-lyrics.is-browsing .np-line.is-active {
+  opacity: 1;
+}
+.np-lyrics.is-plain .np-line {
+  opacity: 0.85;
+  filter: none;
+  transform: none;
+  cursor: default;
+  font-size: clamp(18px, 2vw, 26px);
+}
+.np-lyrics.is-plain .np-line:hover {
+  background: transparent;
+}
+.np-source {
+  position: absolute;
+  right: 28px;
+  bottom: 18px;
+  font-size: 11.5px;
+  color: var(--np-dim);
+  opacity: 0.8;
+}
+
+@media (max-width: 860px) {
+  .np-main {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 18px;
+    padding: 8px 24px 24px;
+  }
+  .np-left {
+    justify-self: center;
+    width: min(100%, 340px, 28vh);
+  }
+  .np-controls {
+    gap: 24px;
+  }
+  .np-line {
+    font-size: 22px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .np,
+  .np.is-leaving,
+  .np-left,
+  .np-lyrics {
+    animation-duration: 0.01s;
+  }
+  .np-bg-art,
+  .np-blob,
+  .np-vinyl {
+    animation: none;
+  }
+  .np-line {
+    transition: none;
+  }
+}

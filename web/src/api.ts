@@ -108,6 +108,8 @@ export const api = {
   audioUrl: (id: number) => `/api/tracks/${id}/audio`,
   trackLyricsUrl: (id: number) => `/api/tracks/${id}/lyrics`,
   candidateLyricsUrl: (id: number) => `/api/candidates/${id}/lyrics`,
+  trackCoverUrl: (id: number) => `/api/tracks/${id}/cover`,
+  candidateCoverUrl: (id: number) => `/api/candidates/${id}/cover`,
   reveal: (id: number) => request<{ ok: true }>(`/tracks/${id}/reveal`, json("POST")),
 
   /** Streams per-provider results as NDJSON. Throws ApiError("http_404") on servers without streaming. */

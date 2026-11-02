@@ -7,9 +7,19 @@ from .base import BaseProvider, audio_url
 
 
 def parse_search(data: dict) -> list[RawCandidate]:
-    return [RawCandidate(provider="zpod", source_id=str(song["id"]), title=song["title"],
-                         artist=song.get("artist", ""), album=song.get("album", ""),
-                         duration=song.get("duration") or None, bitrate=128) for song in data["items"]]
+    results = []
+    for song in data["items"]:
+        cover = song.get("cover")
+        if cover:
+            parsed = urlsplit(cover)
+            # 和音频一样，香港节点的封面需要通过站点代理访问。
+            if parsed.hostname == "hk.zpod.net" and parsed.path.startswith("/api/cover/"):
+                cover = urlunsplit(("https", "zpod.net", "/proxy/hk" + parsed.path, parsed.query, ""))
+        results.append(RawCandidate(provider="zpod", source_id=str(song["id"]), title=song["title"],
+                                    artist=song.get("artist", ""), album=song.get("album", ""),
+                                    duration=song.get("duration") or None, bitrate=128,
+                                    extra={"cover_url": cover}))
+    return results
 
 
 def parse_audio(data: dict, candidate: RawCandidate) -> AudioSource:

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { LoaderCircle, Pause, Play, ScrollText, X } from "lucide-react";
+import { LoaderCircle, Maximize2, Pause, Play, ScrollText, X } from "lucide-react";
+import { NowPlaying } from "./nowplaying";
 import { audioError } from "./api";
 import { fmtDuration } from "./format";
 
@@ -9,6 +10,7 @@ export interface Playable {
   title: string;
   subtitle: string;
   lyricsUrl?: string;
+  coverUrl?: string;
 }
 
 interface PlayerState {
@@ -36,7 +38,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const current = useRef<string | null>(null);
 
-  if (!audio.current && typeof Audio !== "undefined") audio.current = new Audio();
+  if (!audio.current && typeof Audio !== "undefined") {
+    audio.current = new Audio();
+    const saved = Number(localStorage.getItem("songseek.volume"));
+    if (saved > 0 && saved <= 1) audio.current.volume = saved;
+  }
 
   useEffect(() => {
     const a = audio.current!;
@@ -103,13 +109,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
 /* ---------------- lyrics ---------------- */
 
-interface LyricLine {
+export interface LyricLine {
   t: number;
   text: string;
   trans?: string;
 }
 
-interface Lyrics {
+export interface Lyrics {
   lines: LyricLine[];
   synced: boolean;
   source: string | null;
@@ -179,7 +185,7 @@ function useLyrics(url: string | undefined): Lyrics | null {
 }
 
 /** Index of the line being sung at `time` (lines are sorted); -1 before the first line. */
-function activeIndex(lines: LyricLine[], time: number) {
+export function activeIndex(lines: LyricLine[], time: number) {
   let lo = 0;
   let hi = lines.length - 1;
   let found = -1;
@@ -196,6 +202,24 @@ function activeIndex(lines: LyricLine[], time: number) {
 /* ---------------- bar ---------------- */
 
 const PANEL_KEY = "songseek.lyricsOpen";
+
+/** Resolves to the cover URL once the image has actually loaded; null when there is none. */
+export function useCover(url: string | undefined) {
+  const [ready, setReady] = useState<string | null>(null);
+  useEffect(() => {
+    setReady(null);
+    if (!url) return;
+    const img = new Image();
+    let live = true;
+    img.onload = () => live && setReady(url);
+    img.src = url;
+    return () => {
+      live = false;
+      img.onload = null;
+    };
+  }, [url]);
+  return ready;
+}
 
 function PlayerBar({
   audio,
@@ -217,6 +241,8 @@ function PlayerBar({
   const [closing, setClosing] = useState(false);
   const [open, setOpen] = useState(() => localStorage.getItem(PANEL_KEY) === "1");
   const lyrics = useLyrics(item.lyricsUrl);
+  const cover = useCover(item.coverUrl);
+  const [full, setFull] = useState(false);
 
   // Follow the clock every frame while playing so the progress fill and lyrics move smoothly.
   useEffect(() => {
@@ -276,6 +302,23 @@ function PlayerBar({
   const cls = ["player", error && "has-error", closing && "is-closing", open && lyrics && "is-open"].filter(Boolean).join(" ");
 
   return (
+    <>
+    {full && (
+      <NowPlaying
+        audio={audio}
+        item={item}
+        playing={playing}
+        loading={loading}
+        error={error}
+        time={time}
+        length={length}
+        lyrics={lyrics}
+        cover={cover}
+        toggle={() => toggle(item)}
+        seek={seek}
+        onClose={() => setFull(false)}
+      />
+    )}
     <div className={cls} role="region" aria-label="播放器">
       <div className="player-panel" aria-hidden={!(open && lyrics)}>
         <div className="player-panel-inner">
@@ -285,8 +328,14 @@ function PlayerBar({
       </div>
 
       <div className="player-bar">
-        <button className={`disc${playing ? " is-spinning" : ""}${loading ? " is-loading" : ""}`} onClick={() => toggle(item)} aria-label={playing ? "暂停" : "播放"} tabIndex={-1}>
-          <span className="disc-label" />
+        <button
+          className={`disc${playing ? " is-spinning" : ""}${loading ? " is-loading" : ""}`}
+          onClick={() => setFull(true)}
+          aria-label="打开播放页"
+          title="打开播放页"
+        >
+          <span className="disc-label" style={cover ? { backgroundImage: `url("${cover}")` } : undefined} data-cover={cover ? "" : undefined} />
+          <Maximize2 className="disc-hint" size={14} aria-hidden />
         </button>
 
         <div className="player-meta">
@@ -343,6 +392,7 @@ function PlayerBar({
         </div>
       </div>
     </div>
+    </>
   );
 }
 

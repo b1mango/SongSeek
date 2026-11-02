@@ -4,7 +4,7 @@
 
 - 服务只监听 `127.0.0.1`，默认端口 `8765`，前缀 `/api`。
 - 前端构建产物 `web/dist` 由同一服务以静态文件提供：`/` 返回 `index.html`，非 `/api` 路径一律回退到 `index.html`。
-- 请求体和响应体都是 JSON（UTF-8），文件上传除外。
+- 请求体和响应体默认使用 JSON（UTF-8）；文件上传、音频、封面、导出和 SSE 使用各自的内容类型。
 - 时间用 ISO 8601 字符串，时长单位是秒（float），码率单位是 kbps（int）。
 - 出错时返回 `{"error": {"code": "snake_case", "message": "给用户看的中文说明"}}`，状态码使用 4xx/5xx，不返回堆栈。
 
@@ -174,6 +174,15 @@ interface ParseResult {
 | GET | `/api/jobs` | 进行中及最近 20 个 `Job[]` |
 | POST | `/api/jobs/{id}/cancel` | 返回 `Job` |
 | GET | `/api/candidates/{id}/preview` | 代理该候选的音频流，用于试听，支持 Range。只接受数据库里已有的候选 ID，不能当作通用代理 |
+
+### 封面
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/candidates/{id}/cover` | 返回候选封面图片。顺序：自身封面 → 同曲目、同录音版本的非 reject 候选 → 同曲目其他非 reject 候选；获取失败时继续回退 |
+| GET | `/api/tracks/{id}/cover` | 优先读取下载文件的内嵌封面（MP4 `covr`、ID3 `APIC`、FLAC pictures），没有或文件不可读时按选定候选走上述回退链 |
+
+成功返回图片字节，`Content-Type` 为 `image/jpeg`、`image/png` 或 `image/webp`，并带 `Cache-Control: public, max-age=86400`。远程封面使用对应音源的直连/代理与 Referer 策略；每次获取超时约 5 秒，图片上限 5 MiB，内存 LRU 缓存最多 64 张。无可用封面返回 HTTP 404：`{"error":{"code":"cover_not_found","message":"没有找到可用封面"}}`；曲目或候选 ID 不存在使用原有 `not_found` 错误。接口只接受已有 ID。
 
 ### 歌词
 `LyricsResponse = {lrc: string|null, synced: bool, source: string|null, source_label: string|null, translation: string|null}`；`DownloadedFile.lyrics = {path, source, source_label, synced, translated, embedded, error} | null`。

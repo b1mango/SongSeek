@@ -279,3 +279,60 @@ def test_bilibili_tab_annotation_is_not_extracted_as_title():
     from songseek.normalize import title_key
     assert title_key(title) == title_key("そばにいるね")
     assert artist == ""
+
+
+@pytest.mark.parametrize('field', ['AlbumImage', 'Image', 'imgUrl', 'album_img'])
+def test_kugou_cover_url(field):
+    raw = kugou.parse_search({'status': 1, 'data': {'lists': [
+        {'FileHash': 'hash', 'SongName': '晴天', 'SingerName': '周杰伦',
+         field: 'https://singerimg.kugou.com/uploadpic/softhead/{size}/cover.jpg'}]}})[0]
+    assert raw.extra['cover_url'] == 'https://singerimg.kugou.com/uploadpic/softhead/480/cover.jpg'
+
+
+@pytest.mark.parametrize('fields,expected', [
+    ({'cover': 'https://cover.test/qq.jpg', 'albumMID': 'ignored'}, 'https://cover.test/qq.jpg'),
+    ({'pic': 'https://cover.test/qq.jpg'}, 'https://cover.test/qq.jpg'),
+    ({'albumMID': '000MkMni19ClKG'}, 'https://y.gtimg.cn/music/photo_new/T002R500x500M000000MkMni19ClKG.jpg'),
+    ({'albummid': '000MkMni19ClKG'}, 'https://y.gtimg.cn/music/photo_new/T002R500x500M000000MkMni19ClKG.jpg'),
+    ({}, None),
+])
+def test_qq_cover_url(fields, expected):
+    raw = vkeys_qq.parse_song({'songMID': 'mid', 'title': '晴天', 'singer': '周杰伦'} | fields)
+    assert raw.extra['cover_url'] == expected
+
+
+@pytest.mark.parametrize('url,expected', [
+    ('http://cover.test/a.jpg', 'http://cover.test/a.jpg?param=600y600'),
+    ('https://cover.test/a.jpg?v=1#cover', 'https://cover.test/a.jpg?v=1&param=600y600#cover'),
+    ('https://cover.test/a.jpg?param=300y300', 'https://cover.test/a.jpg?param=300y300'),
+    (None, None),
+])
+def test_netease_cover_size(url, expected):
+    raw = netease.parse_song({'id': 42, 'name': '晴天', 'al': {'picUrl': url}})
+    assert raw.extra['cover_url'] == expected
+
+
+@pytest.mark.parametrize('pic', ['//i1.hdslb.com/cover.jpg', 'https://i1.hdslb.com/cover.jpg'])
+def test_bilibili_cover_url(pic):
+    raw = bilibili.parse_search({'code': 0, 'data': {'result': [
+        {'bvid': 'BV123', 'title': '周杰伦 - 晴天', 'duration': '4:29', 'pic': pic}]}})[0]
+    assert raw.extra['cover_url'] == 'https://i1.hdslb.com/cover.jpg'
+    assert raw.extra['version_evidence'] == '周杰伦 - 晴天'
+
+
+@pytest.mark.parametrize('thumbnail', [None, 'https://i.ytimg.com/vi/abcdefghijk/maxresdefault.jpg'])
+def test_youtube_cover_url(thumbnail):
+    raw = youtube.parse_search({'entries': [
+        {'id': 'abcdefghijk', 'title': '周杰伦 - 晴天', 'thumbnail': thumbnail}]})[0]
+    assert raw.extra['cover_url'] == (thumbnail or 'https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg')
+    assert raw.extra['version_evidence'] == '周杰伦 - 晴天'
+
+
+@pytest.mark.parametrize('cover,expected', [
+    (None, None),
+    ('https://hk.zpod.net/api/cover/example?size=480', 'https://zpod.net/proxy/hk/api/cover/example?size=480'),
+    ('https://cover.test/image.jpg', 'https://cover.test/image.jpg'),
+])
+def test_zpod_cover_url(cover, expected):
+    raw = zpod.parse_search({'items': [{'id': '42', 'title': '晴天', 'cover': cover}]})[0]
+    assert raw.extra['cover_url'] == expected

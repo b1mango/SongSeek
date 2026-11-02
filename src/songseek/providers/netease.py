@@ -34,12 +34,17 @@ def parse_song(song: dict) -> RawCandidate:
     artists = song.get("ar", song.get("artists", []))
     album = song.get("al", song.get("album", {}))
     milliseconds = song.get("dt", song.get("duration"))
+    cover = album.get("picUrl")
+    if cover:
+        parsed = urlsplit(cover)
+        if "param" not in parse_qs(parsed.query, keep_blank_values=True):
+            cover = parsed._replace(query=parsed.query + ("&" if parsed.query else "") + "param=600y600").geturl()
     return RawCandidate(provider="netease", source_id=str(song["id"]), title=song["name"],
                         artist=" & ".join(a["name"] for a in artists), album=album.get("name", ""),
                         duration=milliseconds / 1000 if milliseconds else None, bitrate=320,
                         popularity=min(1, max(0, song["pop"] / 100)) if song.get("pop") is not None else None,
                         web_url=f"https://music.163.com/#/song?id={song['id']}",
-                        extra={"fee": song.get("fee", 0), "cover_url": album.get("picUrl")})
+                        extra={"fee": song.get("fee", 0), "cover_url": cover})
 
 
 def parse_search(data: dict) -> list[RawCandidate]:

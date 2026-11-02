@@ -291,6 +291,17 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
     def download_playlist(identifier: int, body: TrackIds = TrackIds()):
         return current().jobs.start("download", identifier, body.track_ids)
 
+    @app.get("/api/candidates/{identifier}/cover")
+    def candidate_cover(identifier: int):
+        data, content_type = current().covers.candidate(identifier)
+        return Response(data, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
+
+    @app.get("/api/tracks/{identifier}/cover")
+    def track_cover(identifier: int):
+        data, content_type = current().covers.track(identifier)
+        # A track's cover changes when another candidate is chosen or the file is re-downloaded.
+        return Response(data, media_type=content_type, headers={"Cache-Control": "no-cache"})
+
     @app.get("/api/candidates/{identifier}/lyrics")
     def candidate_lyrics(identifier: int):
         return current().lyrics.preview(identifier)
