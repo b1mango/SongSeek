@@ -77,8 +77,9 @@ def transfer(source: AudioSource, target: Path, provider: BaseProvider, max_size
         return
     audio_url(source.url)
     started = time.monotonic()
+    headers = provider.headers() | source.headers
     with provider.semaphore, provider.client(timeout=30) as client:
-        with client.stream("GET", source.url, headers=provider.headers() | source.headers) as response:
+        with client.stream("GET", source.url, headers=headers) as response:
             response.raise_for_status()
             content_type = response.headers.get("content-type", "")
             if "text/" in content_type or "json" in content_type:

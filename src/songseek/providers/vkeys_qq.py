@@ -7,23 +7,16 @@ from .base import BaseProvider, audio_url
 
 def parse_song(song: dict) -> RawCandidate:
     # QQ 的 name 会省略 Live 等后缀，必须优先完整 title。
-    return RawCandidate(provider="vkeys_qq", source_id=song.get("mid", song.get("songmid", "")),
-                        title=song.get("title", song.get("songname", "")), artist=" & ".join(s["name"] for s in song["singer"]),
-                        album=song.get("album", {}).get("title", song.get("albumname", "")),
+    return RawCandidate(provider="vkeys_qq", source_id=song["songMID"],
+                        title=song["title"], artist=song["singer"], album=song.get("album", ""),
                         duration=song.get("interval") or None, bitrate=320,
-                        web_url=f"https://y.qq.com/n/ryqq/songDetail/{song.get('mid', song.get('songmid', ''))}")
+                        web_url=f"https://y.qq.com/n/ryqq/songDetail/{song['songMID']}")
 
 
 def parse_search(data: dict) -> list[RawCandidate]:
     if data.get("code") != 0:
         raise SongSeekError("QQ 音乐搜索失败", "provider_error")
-    if "req_1" in data:
-        result = data["req_1"]
-        if result.get("code") != 0:
-            raise SongSeekError("QQ 音乐搜索被限制", "provider_error")
-        songs = result.get("data", {}).get("body", {}).get("song", {}).get("list", [])
-    else:
-        songs = data.get("data", {}).get("song", {}).get("list", [])
+    songs = data.get("data", {}).get("list", [])
     return [parse_song(song) for song in songs]
 
 
@@ -44,7 +37,7 @@ class VKeysQQProvider(BaseProvider):
     referer = "https://y.qq.com/"
 
     def search(self, query: str, limit: int = 15) -> list[RawCandidate]:
-        data = self.request("GET", "https://c.y.qq.com/soso/fcgi-bin/client_search_cp", params={"w": query, "p": 1, "n": limit, "format": "json", "new_json": 1})
+        data = self.request("GET", "https://api.vkeys.cn/music/tencent/search/song", params={"keyword": query, "page": 1})
         return parse_search(data)[:limit]
 
     def resolve(self, candidate: RawCandidate) -> AudioSource:

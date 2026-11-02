@@ -113,3 +113,12 @@ def test_nested_transactions_rollback_as_one_unit(service):
         service.create_playlist("回滚", "text", [ParsedRow(title="不应保留")])
         raise RuntimeError("rollback")
     assert service.playlists() == []
+
+
+def test_repeated_search_errors_are_deduplicated(service, monkeypatch):
+    from songseek.errors import SongSeekError
+    def search(*args):
+        raise SongSeekError("上游接口返回 HTTP 500")
+    monkeypatch.setattr(service.providers["mock"], "search", search)
+    result = service.search_one("晴天 周杰伦")
+    assert result["track"].error == "mock：上游接口返回 HTTP 500"

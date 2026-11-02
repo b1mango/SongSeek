@@ -1,9 +1,16 @@
 import html
 import re
+import threading
+import time
+
+import httpx
 
 from ..errors import SongSeekError
 from ..models import AudioSource, RawCandidate
 from .base import BaseProvider, audio_url
+
+_buvid3 = ""
+_buvid_lock = threading.Lock()
 
 
 def video_title(title: str, artist: str = "") -> tuple[str, str]:
@@ -50,6 +57,30 @@ def parse_audio(data: dict, referer: str) -> AudioSource:
 class BilibiliProvider(BaseProvider):
     id = "bilibili"
     referer = "https://www.bilibili.com/"
+
+    def headers(self) -> dict[str, str]:
+        global _buvid3
+        with _buvid_lock:
+            if not _buvid3:
+                data = super().request("GET", "https://api.bilibili.com/x/frontend/finger/spi")
+                _buvid3 = data.get("data", {}).get("b_3", "")
+                if data.get("code") != 0 or not _buvid3:
+                    raise SongSeekError("哔哩哔哩匿名设备初始化失败", "provider_error")
+        return super().headers() | {"Cookie": f"buvid3={_buvid3}"}
+
+    def request(self, method: str, url: str, **kwargs) -> dict:
+        headers = self.headers() | kwargs.pop("headers", {})
+        for attempt in range(2):
+            try:
+                data = super().request(method, url, headers=headers, **kwargs)
+                if data.get("code") not in (-412, 412):
+                    return data
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code != 412:
+                    raise
+            if attempt == 0:
+                time.sleep(.3)
+        raise SongSeekError("哔哩哔哩请求被限制（412），稍后重试", "rate_limited")
 
     def search(self, query: str, limit: int = 15) -> list[RawCandidate]:
         return parse_search(self.request("GET", "https://api.bilibili.com/x/web-interface/search/type", params={"search_type": "video", "keyword": query, "page": 1, "page_size": limit}))[:limit]

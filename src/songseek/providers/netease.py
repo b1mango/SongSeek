@@ -1,10 +1,29 @@
 import json
 import re
+import random
+import threading
+import time
 from urllib.parse import parse_qs, urlsplit
 
 from ..errors import SongSeekError
 from ..models import AudioSource, ParsedRow, ParseResult, RawCandidate
 from .base import BaseProvider, audio_url
+
+_request_lock = threading.Lock()
+_last_request = 0.0
+
+
+def rate_limited(data: dict) -> bool:
+    return data.get("code") == 405 or "操作频繁" in str(data.get("msg", "")) or "操作频繁" in str(data.get("message", ""))
+
+
+def wait_for_request() -> None:
+    global _last_request
+    with _request_lock:
+        delay = .3 - (time.monotonic() - _last_request)
+        if delay > 0:
+            time.sleep(delay)
+        _last_request = time.monotonic()
 
 
 def parse_song(song: dict) -> RawCandidate:
@@ -20,6 +39,8 @@ def parse_song(song: dict) -> RawCandidate:
 
 
 def parse_search(data: dict) -> list[RawCandidate]:
+    if rate_limited(data):
+        raise SongSeekError("网易云限流（操作频繁），稍后重试", "rate_limited")
     if data.get("code") != 200:
         raise SongSeekError("网易云搜索失败", "provider_error")
     return [parse_song(song) for song in data.get("result", {}).get("songs", [])]
@@ -50,7 +71,14 @@ class NeteaseProvider(BaseProvider):
         headers = {}
         if authenticated and self.config.settings.netease_cookie_set:
             headers["Cookie"] = self.config.cookie_path.read_text("utf-8").strip()
-        return self.request("POST", "https://music.163.com" + path, data=data, headers=headers, follow_redirects=False)
+        for attempt in range(4):
+            wait_for_request()
+            result = self.request("POST", "https://music.163.com" + path, data=data, headers=headers, follow_redirects=False)
+            if not rate_limited(result):
+                return result
+            if attempt < 3:
+                time.sleep(random.uniform(.5, .75) * 2 ** attempt)
+        raise SongSeekError("网易云限流（操作频繁），稍后重试", "rate_limited")
 
     def search(self, query: str, limit: int = 15) -> list[RawCandidate]:
         return parse_search(self.call("/api/search/get/web", s=query, type=1, limit=limit, offset=0))[:limit]

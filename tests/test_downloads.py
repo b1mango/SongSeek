@@ -162,3 +162,42 @@ def test_video_audio_remux_is_lossless_container_change(tmp_path):
     assert before["codec"] == after["codec"] == "aac"
     assert after["format"] == "m4a"
     assert abs(before["duration"] - after["duration"]) < .1
+
+
+def test_decoded_duration_mismatch_falls_back_to_match(service, tone, monkeypatch):
+    import json
+    import songseek.downloader as module
+    target, candidates = searched(service)
+    first = next(c for c in candidates if c.verdict == "match")
+    alternate = first.model_copy(update={"id": 0, "source_id": "alternate"})
+    raw = service.db.raw_candidate(first.id) | {"source_id": "alternate"}
+    alternate.id = service.db.insert("candidates", alternate.model_dump(), track_id=target.id, provider="mock", source_id="alternate", raw=json.dumps(raw))
+    calls = []
+    def resolve(raw):
+        calls.append(raw.source_id)
+        return AudioSource(tone.as_uri(), local_path=str(tone))
+    monkeypatch.setattr(service.providers["mock"], "resolve", resolve)
+    actual_probe = module.probe
+    def probe(path):
+        return actual_probe(path) | {"duration": 191 if len(calls) == 1 else 180}
+    monkeypatch.setattr(module, "probe", probe)
+    result = service.download_track(target.id)
+    assert result.status == "done" and result.chosen_candidate_id == alternate.id
+    assert calls == [first.source_id, "alternate"]
+    assert result.file.duration == 180
+    assert len(list(Path(service.config.settings.output_dir).glob("*.mp3"))) == 1
+
+
+def test_repeated_download_errors_are_deduplicated(service, monkeypatch):
+    import json
+    target, candidates = searched(service)
+    first = next(c for c in candidates if c.verdict == "match")
+    alternate = first.model_copy(update={"id": 0, "source_id": "alternate"})
+    raw = service.db.raw_candidate(first.id) | {"source_id": "alternate"}
+    service.db.insert("candidates", alternate.model_dump(), track_id=target.id, provider="mock", source_id="alternate", raw=json.dumps(raw))
+    def fail(*args):
+        raise SongSeekError("取流失败")
+    monkeypatch.setattr(service.downloader, "download", fail)
+    result = service.download_track(target.id)
+    assert result.status == "failed"
+    assert "试了 2 个候选" in result.error and result.error.count("取流失败") == 1

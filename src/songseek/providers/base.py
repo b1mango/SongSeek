@@ -22,13 +22,14 @@ def audio_url(url: str) -> str:
 class BaseProvider(ABC):
     id: str
     referer = ""
+    uses_proxy = False
 
     def __init__(self, config: Config):
         self.config = config
         self.semaphore = threading.BoundedSemaphore(2)
 
     def client(self, timeout: float = 8) -> httpx.Client:
-        return httpx.Client(proxy=self.config.settings.proxy or None, trust_env=False,
+        return httpx.Client(proxy=(self.config.settings.proxy or None) if self.uses_proxy else None, trust_env=False,
                             timeout=timeout, follow_redirects=True,
                             headers={"User-Agent": USER_AGENT, "Referer": self.referer})
 

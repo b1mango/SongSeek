@@ -30,7 +30,7 @@ def test_netease_anonymous_never_reads_cookie(config, monkeypatch):
 
 
 def test_qq_complete_title_and_link_validation():
-    data = {"code": 0, "req_1": {"code": 0, "data": {"body": {"song": {"list": [{"mid": "mid", "name": "晴天", "title": "晴天 (Live)", "singer": [{"name": "周杰伦"}], "album": {"title": "演唱会"}, "interval": 269}]}}}}}
+    data = {"code": 0, "data": {"list": [{"songMID": "mid", "title": "晴天 (Live)", "singer": "周杰伦", "album": "演唱会", "interval": 269}]}}
     raw = vkeys_qq.parse_search(data)[0]
     assert raw.title == "晴天 (Live)"
     link = {"code": 0, "data": {"songMID": "mid", "kbps": "320kbps", "url": "http://ws.stream.qqmusic.qq.com/a.mp3"}}
@@ -96,6 +96,7 @@ def test_mock_is_deterministic():
 
 
 def test_http_proxy_and_concurrency(config, monkeypatch):
+    config.settings.proxy = "http://127.0.0.1:7897"
     provider = kugou.KugouProvider(config)
     lock = threading.Lock()
     active, maximum = 0, 0
@@ -119,3 +120,99 @@ def test_http_proxy_and_concurrency(config, monkeypatch):
         list(pool.map(provider.search, ["a"] * 6))
     assert maximum == 2
     assert all(item["trust_env"] is False and item["proxy"] is None for item in arguments)
+
+
+@pytest.mark.parametrize("provider_class", [netease.NeteaseProvider, kugou.KugouProvider, vkeys_qq.VKeysQQProvider, zpod.ZpodProvider, bilibili.BilibiliProvider, youtube.YouTubeProvider])
+def test_provider_proxy_policy(config, monkeypatch, provider_class, tmp_path):
+    from songseek.config import PROVIDERS
+    from songseek.downloader import transfer
+    from songseek.models import AudioSource
+    config.settings.proxy = "http://127.0.0.1:7897"
+    monkeypatch.setenv("HTTPS_PROXY", "http://wrong.invalid")
+    monkeypatch.setattr(bilibili, "_buvid3", "anonymous-device")
+    calls = []
+    real = httpx.Client
+    def client(**kwargs):
+        calls.append(kwargs.copy())
+        kwargs.pop("proxy")
+        return real(**kwargs, transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"audio")))
+    monkeypatch.setattr("songseek.providers.base.httpx.Client", client)
+    provider = provider_class(config)
+    with provider.client():
+        pass
+    transfer(AudioSource("https://cdn.example/audio"), tmp_path / "audio.part", provider)
+    expected = config.settings.proxy if provider.id == "youtube" else None
+    assert len(calls) == 2
+    assert all(c["proxy"] == expected and c["trust_env"] is False for c in calls)
+    assert provider.uses_proxy == (next(p.needs for p in PROVIDERS if p.id == provider.id) == "proxy")
+
+
+@pytest.mark.parametrize("limited", [{"code": 405}, {"code": 500, "msg": "操作频繁，请稍候再试"}, {"code": 500, "message": "操作频繁"}])
+def test_netease_rate_limit_retry(config, monkeypatch, limited):
+    provider = netease.NeteaseProvider(config)
+    responses = iter([limited, limited, {"code": 200, "result": {"songs": []}}])
+    waits = []
+    monkeypatch.setattr(netease, "wait_for_request", lambda: None)
+    monkeypatch.setattr(netease.time, "sleep", waits.append)
+    monkeypatch.setattr(provider, "request", lambda *a, **kw: next(responses))
+    assert provider.search("晴天") == []
+    assert len(waits) == 2 and sum(waits) <= 2.25
+    monkeypatch.setattr(provider, "request", lambda *a, **kw: limited)
+    waits.clear()
+    with pytest.raises(SongSeekError, match="网易云限流（操作频繁），稍后重试"):
+        provider.search("晴天")
+    assert len(waits) == 3 and sum(waits) <= 5.25
+
+
+def test_netease_request_spacing_shared_across_instances(config, monkeypatch):
+    clock = [100.0]
+    starts = []
+    monkeypatch.setattr(netease, "_last_request", 0.0)
+    monkeypatch.setattr(netease.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(netease.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay))
+    def request(*a, **kw):
+        starts.append(clock[0])
+        return {"code": 200}
+    monkeypatch.setattr(netease.NeteaseProvider, "request", request)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: netease.NeteaseProvider(config).call("/api/test"), range(4)))
+    assert all(b - a >= .3 - 1e-9 for a, b in zip(starts, starts[1:]))
+
+
+def test_qq_search_uses_vkeys(config, monkeypatch):
+    provider = vkeys_qq.VKeysQQProvider(config)
+    def request(method, url, **kwargs):
+        assert method == "GET" and url == "https://api.vkeys.cn/music/tencent/search/song"
+        assert kwargs["params"] == {"keyword": "晴天 周杰伦", "page": 1}
+        return {"code": 0, "data": {"list": [{"songMID": "mid", "title": "晴天", "singer": "周杰伦", "interval": 269}]}}
+    monkeypatch.setattr(provider, "request", request)
+    raw = provider.search("晴天 周杰伦", 1)[0]
+    assert raw.duration == 269 and raw.source_id == "mid"
+    with pytest.raises(SongSeekError, match="搜索失败"):
+        vkeys_qq.parse_search({"code": 500})
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+def test_bilibili_cookie_cached_and_412_retried(config, monkeypatch, blocked):
+    monkeypatch.setattr(bilibili, "_buvid3", "")
+    monkeypatch.setattr(bilibili.time, "sleep", lambda _: None)
+    calls = []
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path.endswith("/spi"):
+            return httpx.Response(200, json={"code": 0, "data": {"b_3": "anonymous-device"}})
+        assert request.headers["Cookie"] == "buvid3=anonymous-device"
+        if blocked or len(calls) == 2:
+            return httpx.Response(412)
+        return httpx.Response(200, json={"code": 0, "data": {"result": []}})
+    monkeypatch.setattr(bilibili.BilibiliProvider, "client", lambda *a, **kw: httpx.Client(transport=httpx.MockTransport(handler)))
+    provider = bilibili.BilibiliProvider(config)
+    if blocked:
+        with pytest.raises(SongSeekError, match="412"):
+            provider.search("晴天")
+        assert len(calls) == 3
+    else:
+        assert provider.search("晴天") == []
+        assert bilibili.BilibiliProvider(config).search("晴天") == []
+        assert len(calls) == 4
+    assert sum(path.endswith("/spi") for path in calls) == 1

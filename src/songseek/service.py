@@ -230,7 +230,7 @@ class Service:
                     self.db.save("candidates", candidate.model_dump())
                 track.candidate_count = len(ranked)
                 track.best_score = ranked[0].score if ranked else None
-                track.error = "；".join(errors)[:300] or None
+                track.error = "；".join(dict.fromkeys(errors))[:300] or None
                 available = [c for c in ranked if c.verdict != "reject"]
                 if track.chosen_by == "user" and track.chosen_candidate_id in {c.id for c in ranked}:
                     track.status = "matched"
@@ -275,7 +275,7 @@ class Service:
                     return self.save_track(track)
                 except Exception as error:
                     errors.append(f"{candidate.provider_label}：{log_failure(candidate.provider, error)}")
-            summary = "；".join(errors) if len(errors) == 1 else f"试了 {len(errors)} 个候选都失败 — " + "；".join(errors)
+            summary = (f"试了 {len(errors)} 个候选都失败 — " if len(errors) > 1 else "") + "；".join(dict.fromkeys(errors))
             track.status, track.error = "failed", summary[:300]
             return self.save_track(track)
 

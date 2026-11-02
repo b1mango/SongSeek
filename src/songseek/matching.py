@@ -49,6 +49,7 @@ def sort_candidates(candidates: list[Candidate], orders: dict[str, int]) -> list
     ranked = sorted(candidates, key=lambda c: (
         {"match": 0, "review": 1, "reject": 2}[c.verdict],
         -c.score if c.verdict != "match" else 0,
+        c.duration is None if c.verdict == "review" else False,
         -(10000 if c.quality.format in ("flac", "wav", "alac") else c.quality.bitrate or 0),
         -(c.popularity or 0), orders[c.provider], -c.score, c.source_id,
     ))

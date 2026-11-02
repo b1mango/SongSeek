@@ -39,6 +39,7 @@ def parse_audio(data: dict) -> AudioSource:
 
 class YouTubeProvider(BaseProvider):
     id = "youtube"
+    uses_proxy = True
 
     def command(self, arguments: list[str], timeout: int = 11) -> dict:
         command = ["yt-dlp", "--ignore-config", "--no-cache-dir", "--no-update", "--no-warnings", "--socket-timeout", "7", "--retries", "0", "--proxy", self.config.settings.proxy]

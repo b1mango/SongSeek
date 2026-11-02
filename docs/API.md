@@ -120,7 +120,7 @@ interface Settings {
   output_dir: string;
   filename_template: string;     // 默认 "{artist} - {title}"，扩展名由程序补
   group_by_playlist: boolean;    // 为 true 时按清单名建子目录
-  proxy: string;                 // 例如 "http://127.0.0.1:7897"，空字符串表示不用代理
+  proxy: string;                 // 仅 YouTube 使用，例如 "http://127.0.0.1:7897"；其他音源搜索、取流、下载均直连，空字符串表示不用代理
   search_concurrency: number;
   download_concurrency: number;
   auto_approve: boolean;         // 为 true 时，最佳候选判定为 match 就自动选定

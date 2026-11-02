@@ -63,3 +63,37 @@ def test_title_similarity_threshold_and_annotation():
     assert evaluate(track(title="abcdefghij"), candidate(title="abcdefghik"), "演示").verdict == "match"
     assert evaluate(track(title="abcdefghij"), candidate(title="abcdefghxx"), "演示").verdict == "reject"
     assert evaluate(track(title="晴天 (原词)"), candidate(), "演示").verdict == "reject"
+
+
+@pytest.mark.parametrize("annotation", [
+    ' (电影《熊出没之雪岭熊风》插曲)', ' (正式版)', ' (鬼怪OST)',
+    '（电视剧《某剧》主题曲）', '【动画片尾曲】', ' [游戏原声]',
+    ' - 电影《某片》插曲', ' - 《Original Soundtrack》',
+    ' (完整版)', ' (综艺推广曲)', ' (宣传曲)', ' (片头曲)',
+    ' (Original Soundtrack)', ' (from "Some Film")',
+])
+def test_descriptive_title_annotations(annotation):
+    from songseek.normalize import title_key
+    title = "你从未离去" + annotation
+    assert title_key(title) == title_key("你从未离去")
+    assert evaluate(track(title=title), candidate(title="你从未离去"), "演示").verdict == "match"
+
+
+@pytest.mark.parametrize("annotation", ["原词", "女声版", "男声版", "第二章", "Lost", "Ghost", "电影女声版"])
+def test_unknown_and_voice_annotations_are_not_stripped(annotation):
+    from songseek.normalize import title_key
+    assert title_key(f"晴天 ({annotation})") != title_key("晴天")
+    assert evaluate(track(), candidate(title=f"晴天 ({annotation})"), "演示").verdict == "reject"
+
+
+@pytest.mark.parametrize("annotation, flag", [("Live", "live"), ("伴奏", "instrumental"), ("DJ", "dj"), ("Remix", "remix"), ("翻唱", "cover"), ("纯音乐", "instrumental"), ("电影插曲 Live", "live")])
+def test_annotations_preserve_version_rejection(annotation, flag):
+    result = evaluate(track(), candidate(title=f"晴天 ({annotation})"), "演示")
+    assert flag in result.flags and result.verdict == "reject"
+
+
+def test_review_tie_prefers_known_duration_before_quality_and_provider():
+    known = evaluate(track(duration=None), candidate(provider="other", bitrate=128), "其他")
+    unknown = evaluate(track(duration=None), candidate(duration=None, bitrate=320), "演示")
+    assert known.verdict == unknown.verdict == "review" and known.score == unknown.score
+    assert sort_candidates([unknown, known], {"mock": 0, "other": 1}) == [known, unknown]
