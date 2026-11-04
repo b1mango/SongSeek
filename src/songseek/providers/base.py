@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from ..config import Config
+from ..netproxy import effective_proxy
 from ..errors import SongSeekError, public_error
 from ..models import AudioSource, Health, Lyrics, RawCandidate, now
 
@@ -58,7 +59,7 @@ class BaseProvider(ABC):
         self.remaining(8)
 
     def client(self, timeout: float = 8) -> httpx.Client:
-        return httpx.Client(proxy=(self.config.settings.proxy or None) if self.uses_proxy else None, trust_env=False,
+        return httpx.Client(proxy=effective_proxy(self.config.settings) if self.uses_proxy else None, trust_env=False,
                             timeout=timeout, follow_redirects=True,
                             headers={"User-Agent": USER_AGENT, "Referer": self.referer})
 

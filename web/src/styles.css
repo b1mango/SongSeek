@@ -3318,3 +3318,175 @@ button.source-pill:focus-visible {
     font-size: 22px;
   }
 }
+
+/* ---------- Settings: network / proxy ---------- */
+.net-card .section-head {
+  margin-bottom: -6px;
+}
+.net-lead {
+  margin: 0;
+}
+.mode-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--idle-soft);
+  border: 1px solid var(--rule);
+}
+.mode-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 9px 14px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.mode-option:hover:not(.is-on):not(:disabled) {
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--sleeve) 50%, transparent);
+}
+.mode-option.is-on {
+  background: var(--sleeve);
+  color: var(--ink);
+  border-color: var(--rule);
+  box-shadow: 0 1px 2px rgba(29, 26, 22, 0.06), 0 2px 8px rgba(29, 26, 22, 0.06);
+}
+.mode-option:disabled {
+  cursor: progress;
+}
+.mode-option:focus-visible {
+  outline: 2px solid var(--label);
+  outline-offset: 1px;
+}
+.mode-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.mode-hint {
+  font-size: 12px;
+  opacity: 0.8;
+}
+.mode-option.is-on .mode-title::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 7px 2px 0;
+  border-radius: 50%;
+  background: var(--label);
+  vertical-align: middle;
+}
+.net-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  background: var(--sleeve-2);
+  border: 1px solid var(--rule);
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.net-status .dot {
+  margin: 0 2px 0 2px;
+  background: var(--t);
+  box-shadow: 0 0 0 3px var(--ts);
+}
+.net-addr {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--idle-soft);
+  font: 12px/1.6 var(--font-mono);
+  color: var(--ink);
+}
+.net-suggest {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 2px;
+}
+.chip-btn {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--rule-strong);
+  background: var(--sleeve);
+  color: var(--ink-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.chip-btn:hover {
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+.net-test {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  font-size: 13px;
+  animation: net-in 0.25s ease both;
+}
+.net-test.is-ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.net-test.is-bad {
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+.net-test-via {
+  margin-left: auto;
+  font-size: 12px;
+  opacity: 0.8;
+}
+@keyframes net-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+@media (max-width: 640px) {
+  .mode-hint {
+    display: none;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  .mode-picker {
+    background: var(--paper);
+  }
+  .mode-option.is-on {
+    background: var(--sleeve-2);
+    border-color: var(--rule-strong);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  .mode-option:hover:not(.is-on):not(:disabled) {
+    background: color-mix(in srgb, var(--sleeve) 70%, transparent);
+  }
+}
+
+/* Inside the desktop app window: chrome behaves like an app, not a web page. */
+html.is-desktop .sidebar,
+html.is-desktop button,
+html.is-desktop .page-head h1,
+html.is-desktop th {
+  -webkit-user-select: none;
+  user-select: none;
+}
+html.is-desktop a,
+html.is-desktop img {
+  -webkit-user-drag: none;
+}

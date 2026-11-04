@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Activity, KeyRound, LoaderCircle, Save } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { ArrowDown, ArrowUp, Activity, CircleCheck, CircleX, FolderOpen, Globe, KeyRound, LoaderCircle, Radar, Save } from "lucide-react";
 import { api } from "../api";
 import { useToast } from "../components";
+import { useSystem } from "../desktop";
 import { setLyricsPref } from "../store";
-import type { Provider, Settings } from "../types";
+import type { Provider, ProxyMode, ProxyStatus, ProxyTest, Settings } from "../types";
 
 export function SettingsPage() {
   const toast = useToast();
@@ -13,6 +14,7 @@ export function SettingsPage() {
   const [cookie, setCookie] = useState("");
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
+  const system = useSystem();
 
   useEffect(() => {
     api.providers().then(setProviders).catch((e) => toast("bad", e.message));
@@ -59,7 +61,7 @@ export function SettingsPage() {
     if (!draft) return;
     setSaving(true);
     try {
-      const { netease_cookie_set: _ignored, ...patch } = draft;
+      const { netease_cookie_set: _ignored, proxy: _proxy, proxy_mode: _mode, ...patch } = draft;
       const s = await api.saveSettings({ ...patch, ...extra });
       setSettings(s);
       setDraft(s);
@@ -147,7 +149,26 @@ export function SettingsPage() {
           <h2>下载</h2>
           <label className="field">
             <span className="field-label">保存到</span>
-            <input className="input mono" value={draft.output_dir} onChange={(e) => set("output_dir", e.target.value)} />
+            <div className="row gap-8">
+              <input className="input mono grow" value={draft.output_dir} onChange={(e) => set("output_dir", e.target.value)} />
+              {system?.desktop && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    try {
+                      const { path } = await api.pickFolder(draft.output_dir);
+                      if (path) set("output_dir", path);
+                    } catch (err) {
+                      toast("bad", (err as Error).message);
+                    }
+                  }}
+                >
+                  <FolderOpen size={15} /> 选择…
+                </button>
+              )}
+            </div>
           </label>
           <label className="field">
             <span className="field-label">文件名模板</span>
@@ -186,17 +207,22 @@ export function SettingsPage() {
               <input className="input mono" type="number" min={1} max={8} value={draft.download_concurrency} onChange={(e) => set("download_concurrency", Number(e.target.value))} />
             </label>
           </div>
-          <label className="field">
-            <span className="field-label">代理</span>
-            <input className="input mono" placeholder="留空表示直连，例如 http://127.0.0.1:7890" value={draft.proxy} onChange={(e) => set("proxy", e.target.value)} />
-            <span className="field-help">只有 YouTube 走代理；网易云、QQ、酷狗等国内音源始终直连（走代理反而容易被限流）。</span>
-          </label>
           <div className="row end">
             <button className="btn btn-primary" disabled={!dirty || saving} onClick={() => save()}>
               {saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />} 保存设置
             </button>
           </div>
         </section>
+      )}
+
+      {settings && (
+        <NetworkCard
+          settings={settings}
+          onSaved={(s) => {
+            setSettings(s);
+            setDraft((d) => (d ? { ...d, proxy: s.proxy, proxy_mode: s.proxy_mode } : s));
+          }}
+        />
       )}
 
       {settings && (
@@ -227,6 +253,166 @@ export function SettingsPage() {
             )}
           </div>
         </section>
+      )}
+    </div>
+  );
+}
+
+const MODES: { id: ProxyMode; title: string; hint: string }[] = [
+  { id: "auto", title: "自动", hint: "跟随系统代理" },
+  { id: "manual", title: "手动", hint: "填写代理地址" },
+  { id: "off", title: "不用", hint: "全部直连" },
+];
+
+const SOURCE_LABEL = { system: "系统代理", env: "环境变量", manual: "手动填写" } as const;
+
+/** Proxy for YouTube: follows the system by default, saves on every change. */
+function NetworkCard({ settings, onSaved }: { settings: Settings; onSaved: (s: Settings) => void }) {
+  const toast = useToast();
+  const mode: ProxyMode = settings.proxy_mode ?? (settings.proxy ? "manual" : "auto");
+  const [address, setAddress] = useState(settings.proxy);
+  const [status, setStatus] = useState<ProxyStatus | null>(null);
+  const [test, setTest] = useState<ProxyTest | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const refresh = useCallback(() => {
+    api.proxy().then(setStatus).catch(() => setStatus(null));
+  }, []);
+  useEffect(refresh, [refresh, settings.proxy_mode, settings.proxy]);
+  useEffect(() => setAddress(settings.proxy), [settings.proxy]);
+
+  async function save(patch: { proxy_mode?: ProxyMode; proxy?: string }) {
+    setSaving(true);
+    setTest(null);
+    try {
+      onSaved(await api.saveSettings(patch));
+    } catch (e) {
+      toast("bad", (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function runTest() {
+    setTesting(true);
+    setTest(null);
+    try {
+      setTest(await api.testProxy(mode, mode === "manual" ? address.trim() : undefined));
+    } catch (e) {
+      setTest({ ok: false, proxy: null, latency_ms: null, error: (e as Error).message });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  const addressDirty = address.trim() !== settings.proxy;
+
+  return (
+    <section className="card stack gap-16 net-card">
+      <div className="row between section-head">
+        <h2 className="row gap-8">
+          <Globe size={17} /> 网络
+        </h2>
+        <button className="btn btn-sm" onClick={runTest} disabled={testing || saving || (mode === "manual" && !address.trim())}>
+          {testing ? <LoaderCircle className="spin" size={14} /> : <Radar size={14} />} 测试 YouTube 连接
+        </button>
+      </div>
+      <p className="muted small net-lead">只有 YouTube 需要代理。网易云、QQ、酷狗等国内音源始终直连，走代理反而容易被限流。</p>
+
+      <div className="mode-picker" role="radiogroup" aria-label="代理方式">
+        {MODES.map((m) => (
+          <button
+            key={m.id}
+            role="radio"
+            aria-checked={mode === m.id}
+            className={`mode-option${mode === m.id ? " is-on" : ""}`}
+            disabled={saving}
+            onClick={() => mode !== m.id && save({ proxy_mode: m.id })}
+          >
+            <span className="mode-title">{m.title}</span>
+            <span className="mode-hint">{m.hint}</span>
+          </button>
+        ))}
+      </div>
+
+      {mode === "auto" && <AutoStatus status={status} onUse={(p) => save({ proxy_mode: "manual", proxy: p })} />}
+
+      {mode === "manual" && (
+        <form
+          className="row gap-8"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (addressDirty) save({ proxy: address.trim() });
+          }}
+        >
+          <input
+            className="input mono grow"
+            placeholder="例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            aria-label="代理地址"
+          />
+          <button className="btn" disabled={!addressDirty || saving}>
+            {saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />} 保存
+          </button>
+        </form>
+      )}
+
+      {mode === "off" && (
+        <div className="net-status">
+          <span className="dot tone-idle" />
+          <span>所有音源直连。代理软件开了全局或 TUN 模式时，选这个即可。</span>
+        </div>
+      )}
+
+      {test && (
+        <div className={`net-test ${test.ok ? "is-ok" : "is-bad"}`} role="status">
+          {test.ok ? <CircleCheck size={16} /> : <CircleX size={16} />}
+          <span>
+            {test.ok ? "YouTube 可以连通" : `连不上 YouTube${test.error ? "：" + test.error : ""}`}
+            {test.latency_ms != null && <span className="mono"> · {test.latency_ms} ms</span>}
+          </span>
+          <span className="net-test-via mono">{test.proxy ? `经 ${test.proxy}` : "直连"}</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AutoStatus({ status, onUse }: { status: ProxyStatus | null; onUse: (proxy: string) => void }) {
+  if (!status)
+    return (
+      <div className="net-status">
+        <LoaderCircle className="spin" size={14} />
+        <span className="muted">正在读取系统代理…</span>
+      </div>
+    );
+  if (status.effective)
+    return (
+      <div className="net-status">
+        <span className="dot tone-ok" />
+        <span>已检测到{status.source ? SOURCE_LABEL[status.source] : "代理"}</span>
+        <code className="net-addr">{status.effective}</code>
+      </div>
+    );
+  return (
+    <div className="stack gap-8">
+      <div className="net-status">
+        <span className="dot tone-warn" />
+        <span>{status.pac ? "系统用的是自动配置脚本（PAC），暂不支持读取，YouTube 会直连。" : "没有检测到系统代理，YouTube 会直连。"}</span>
+      </div>
+      {status.local_candidates.length > 0 && (
+        <div className="net-suggest">
+          <span className="muted small">本机这些端口像是代理软件，但没设成系统代理：</span>
+          <div className="row gap-8 wrap">
+            {status.local_candidates.map((p) => (
+              <button key={p} className="chip-btn mono" onClick={() => onUse(p)} title="改为手动并使用这个地址">
+                {p.replace(/^https?:\/\//, "")} · 使用
+              </button>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

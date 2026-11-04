@@ -1,0 +1,38 @@
+name: Desktop builds
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: uv sync --locked --extra desktop --group build
+      - run: uv run --extra desktop --group build python scripts/build_desktop.py
+      - name: macOS selftest
+        if: runner.os == 'macOS'
+        run: dist/觅音.app/Contents/MacOS/SongSeek --selftest
+      - name: Windows selftest
+        if: runner.os == 'Windows'
+        run: dist/SongSeek/SongSeek.exe --selftest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SongSeek-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            dist/*.dmg
+            dist/*.zip

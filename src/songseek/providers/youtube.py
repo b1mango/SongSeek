@@ -3,6 +3,8 @@ import os
 import subprocess
 import time
 
+from ..netproxy import effective_proxy
+from ..tools import resolve_tool, yt_dlp_command
 from ..errors import SongSeekError, public_error
 from ..models import AudioSource, Health, RawCandidate, now
 from .base import BaseProvider, audio_url
@@ -44,13 +46,15 @@ class YouTubeProvider(BaseProvider):
     uses_proxy = True
 
     def command(self, arguments: list[str], timeout: int = 8) -> dict:
-        command = ["yt-dlp", "--ignore-config", "--no-cache-dir", "--no-update", "--no-warnings", "--socket-timeout", "7", "--retries", "0", "--proxy", self.config.settings.proxy]
+        command = yt_dlp_command() + ["--ignore-config", "--no-cache-dir", "--no-update", "--no-warnings", "--socket-timeout", "7", "--retries", "0", "--proxy", effective_proxy(self.config.settings) or ""]
+        if ffmpeg := resolve_tool("ffmpeg"):
+            command += ["--ffmpeg-location", ffmpeg]
         try:
             with self.slot():
                 result = subprocess.run(command + arguments, capture_output=True, text=True, timeout=self.remaining(timeout),
                                         env={k: v for k, v in os.environ.items() if k.lower() not in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")})
         except FileNotFoundError:
-            raise SongSeekError("未安装系统 yt-dlp", "missing_tool") from None
+            raise SongSeekError("未安装 yt-dlp", "missing_tool") from None
         except subprocess.TimeoutExpired:
             raise SongSeekError("YouTube 请求超时，请检查代理", "provider_timeout") from None
         if result.returncode:

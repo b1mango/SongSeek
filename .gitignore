@@ -8,3 +8,6 @@ __pycache__/
 web/node_modules/
 web/dist/
 .DS_Store
+dist/
+.build-cache/
+web/tsconfig.tsbuildinfo

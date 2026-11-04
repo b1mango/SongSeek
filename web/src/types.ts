@@ -131,6 +131,7 @@ export interface Settings {
   filename_template: string;
   group_by_playlist: boolean;
   proxy: string;
+  proxy_mode?: ProxyMode;
   search_concurrency: number;
   download_concurrency: number;
   auto_approve: boolean;
@@ -180,4 +181,31 @@ export interface ArtistInfo {
   name: string;
   aliases: string[];
   cover_url?: string | null;
+}
+
+export type ProxyMode = "auto" | "manual" | "off";
+
+export interface ProxyStatus {
+  mode: ProxyMode;
+  effective: string | null;
+  source: "manual" | "env" | "system" | null;
+  system: string | null;
+  env: string | null;
+  pac: boolean;
+  local_candidates: string[];
+}
+
+export interface ProxyTest {
+  ok: boolean;
+  proxy: string | null;
+  latency_ms: number | null;
+  error: string | null;
+}
+
+export interface SystemInfo {
+  desktop: boolean;
+  platform: "darwin" | "win32" | "linux";
+  version: string;
+  data_dir: string;
+  tools: { ffmpeg: boolean; ffprobe: boolean; yt_dlp: boolean };
 }

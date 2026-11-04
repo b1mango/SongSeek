@@ -4,6 +4,8 @@ import queue
 import subprocess
 import sys
 import time
+import webbrowser
+from importlib.metadata import version
 from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -19,6 +21,8 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import iterate_in_threadpool
 from starlette.exceptions import HTTPException
 
+from . import netproxy
+from .tools import availability, resource_dir
 from .config import Config
 from .errors import SongSeekError, logger, public_error
 from .matching import same_recording
@@ -92,6 +96,7 @@ class SettingsUpdate(Model):
     output_dir: str | None = None
     filename_template: str | None = Field(default=None, max_length=500)
     group_by_playlist: bool | None = None
+    proxy_mode: Literal["auto", "manual", "off"] | None = None
     proxy: str | None = None
     search_concurrency: int | None = Field(default=None, ge=1, le=32)
     download_concurrency: int | None = Field(default=None, ge=1, le=16)
@@ -101,6 +106,19 @@ class SettingsUpdate(Model):
     lyrics_embed: bool | None = None
     netease_cookie_set: bool | None = None
     netease_cookie: SecretStr | None = None
+
+
+class ProxyTest(Model):
+    mode: Literal["auto", "manual", "off"] | None = None
+    proxy: str | None = None
+
+
+class PickFolder(Model):
+    initial: str | None = None
+
+
+class OpenURL(Model):
+    url: str
 
 
 class ParseInput(Model):
@@ -113,7 +131,8 @@ def error_response(message: str, code: str, status: int) -> JSONResponse:
     return JSONResponse({"error": {"code": code, "message": message}}, status_code=status)
 
 
-def create_app(config: Config | None = None, service: Service | None = None) -> FastAPI:
+def create_app(config: Config | None = None, service: Service | None = None, *,
+               port: int | None = None, desktop=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app):
         app.state.service = service or Service(config)
@@ -126,11 +145,12 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
 
     @app.middleware("http")
     async def local_origin(request: Request, call_next):
-        if request.url.hostname not in ("127.0.0.1", "localhost", "testserver"):
+        allowed = {f"127.0.0.1:{port}", f"localhost:{port}"} if port is not None else {"testserver", "127.0.0.1", "localhost"}
+        if request.headers.get("host", "").lower() not in allowed:
             return error_response("仅允许本机地址访问", "invalid_host", 400)
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("origin")
-            if origin and urlsplit(origin).hostname not in ("127.0.0.1", "localhost"):
+            if origin and (urlsplit(origin).netloc.lower() not in allowed or urlsplit(origin).scheme != "http"):
                 return error_response("仅允许本机页面操作", "invalid_origin", 403)
         return await call_next(request)
 
@@ -470,7 +490,43 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
             values["netease_cookie"] = body.netease_cookie.get_secret_value()
         return current().config.update(values)
 
-    dist = Path(__file__).resolve().parents[2] / "web" / "dist"
+    @app.get("/api/health")
+    def health():
+        return {"ok": True}
+
+    @app.get("/api/proxy")
+    def proxy_status():
+        return netproxy.status(current().config.settings)
+
+    @app.post("/api/proxy/test")
+    def proxy_test(body: ProxyTest = ProxyTest()):
+        settings = current().config.settings.model_copy(deep=True)
+        if body.mode is not None:
+            settings.proxy_mode = body.mode
+        if body.proxy is not None:
+            settings.proxy = body.proxy
+        return netproxy.test_connection(settings)
+
+    @app.get("/api/system")
+    def system():
+        return {"desktop": desktop is not None, "platform": sys.platform, "version": version("songseek"),
+                "data_dir": str(current().config.home), "tools": availability()}
+
+    @app.post("/api/system/pick-folder")
+    def pick_folder(body: PickFolder = PickFolder()):
+        if desktop is None or desktop.window is None:
+            raise SongSeekError("请在桌面应用中选择文件夹", "not_desktop", 409)
+        return {"path": desktop.pick_folder(body.initial)}
+
+    @app.post("/api/system/open-url")
+    def open_url(body: OpenURL):
+        parsed = urlsplit(body.url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+            raise SongSeekError("仅支持 http/https 网页地址", "invalid_url")
+        webbrowser.open(body.url)
+        return {"ok": True}
+
+    dist = resource_dir() / "web" / "dist"
 
     @app.get("/{path:path}")
     def frontend(path: str):

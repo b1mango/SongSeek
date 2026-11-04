@@ -270,3 +270,24 @@ Token 不透明，候选保存在进程内 LRU（4096 条，2 小时 TTL），�
 | POST | `/api/providers/health` | 同步检查全部启用的音源，每个最多 10s，返回 `Provider[]` |
 | GET | `/api/settings` | `Settings` |
 | PUT | `/api/settings` | 部分更新 `Settings`。额外字段 `netease_cookie?: string`，传空字符串表示清除。返回 `Settings` |
+
+### 桌面、健康检查与代理
+
+服务始终绑定 `127.0.0.1`。Host 必须为 `127.0.0.1:<实际端口>` 或 `localhost:<实际端口>`；写请求的 Origin（若有）也必须为同端口本机 HTTP 地址。
+
+`Settings` 增加 `proxy_mode: "auto" | "manual" | "off"`，默认 `auto`，GET/PUT `/api/settings` 均支持。`proxy` 保留为手动地址。旧设置缺失模式时，非空 proxy 迁移为 manual，否则 auto。国内音源继续直连。
+
+| 方法 | 路径 | 请求及响应 |
+|---|---|---|
+| GET | `/api/health` | `{ok:true}` |
+| GET | `/api/proxy` | `{mode, effective:string|null, source:"manual"|"env"|"system"|null, system:string|null, env:string|null, pac:boolean, local_candidates:string[]}` |
+| POST | `/api/proxy/test` | `{mode?:"auto"|"manual"|"off", proxy?:string}`，可省略请求体；省略字段使用当前设置，不保存试填值。返回 `{ok:boolean, proxy:string|null, latency_ms:number|null, error:string|null}`；连接错误以 HTTP 200 + ok:false 返回，字段类型或模式错误为 422 |
+| GET | `/api/system` | `{desktop:boolean, platform:"darwin"|"win32"|"linux", version:string, data_dir:string, tools:{ffmpeg:boolean,ffprobe:boolean,yt_dlp:boolean}}` |
+| POST | `/api/system/pick-folder` | `{initial?:string}`，返回 `{path:string|null}`，取消返回 null；非桌面或无窗口模式返回 409，error.code=`not_desktop` |
+| POST | `/api/system/open-url` | `{url:string}`，仅接受 http/https，打开系统浏览器并返回 `{ok:true}`；非法地址为 400 |
+
+自动代理优先级：`HTTPS_PROXY`、`https_proxy`、`ALL_PROXY`、`all_proxy`、`HTTP_PROXY`、`http_proxy`，再查询系统代理（HTTPS → HTTP → SOCKS）。检测缓存 15 秒，手动和不用模式立即生效。`pac:true` 表示发现 PAC/自动发现配置，应用不执行 PAC。无自动代理时探测常用回环端口并返回建议，仅开放 TCP 端口不代表已验证为代理，用户需手动选择并测试。代理地址不接受用户名或密码。
+
+连接测试通过所解析的代理（null 表示强制直连）向 `https://www.youtube.com/generate_204` 发送 HTTPS GET，超时 5 秒。错误仅提供中文短句。LRCLIB 保留先直连、失败后使用有效代理的行为。
+
+`POST /api/tracks/{id}/reveal` 通过系统参数列表调用 Finder / Explorer / xdg-open；Windows 文件路径作为独立参数传给 Explorer `/select,`，支持空格与中文。

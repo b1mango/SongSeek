@@ -24,6 +24,7 @@ from mutagen.wave import WAVE
 
 from .config import Config
 from .covers import fetch_cover, image_type
+from .tools import require_tool
 from .errors import SongSeekError
 from .models import AudioSource, DownloadedFile, RawCandidate, Track
 from .normalize import tolerance
@@ -39,7 +40,7 @@ def digest(path: Path) -> str:
 
 def probe(path: Path) -> dict:
     try:
-        result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration,format_name:stream=codec_type,codec_name,bit_rate", "-of", "json", str(path)], capture_output=True, text=True, timeout=30)
+        result = subprocess.run([require_tool("ffprobe"), "-v", "error", "-show_entries", "format=duration,format_name:stream=codec_type,codec_name,bit_rate", "-of", "json", str(path)], capture_output=True, text=True, timeout=30)
     except FileNotFoundError:
         raise SongSeekError("未安装系统 ffprobe", "missing_tool") from None
     except subprocess.TimeoutExpired:
@@ -63,7 +64,7 @@ def verify(path: Path, expected: float | None = None) -> dict:
     if expected is not None and abs(duration - expected) > tolerance(expected):
         raise SongSeekError(f"实际时长 {duration:.1f}s 与目标 {expected:.1f}s 不符，已拦截", "duration_mismatch")
     try:
-        decoded = subprocess.run(["ffmpeg", "-v", "error", "-xerror", "-i", str(path), "-f", "null", "-"], capture_output=True, text=True, timeout=max(90, duration * 2))
+        decoded = subprocess.run([require_tool("ffmpeg"), "-v", "error", "-xerror", "-i", str(path), "-f", "null", "-"], capture_output=True, text=True, timeout=max(90, duration * 2))
     except FileNotFoundError:
         raise SongSeekError("未安装系统 ffmpeg", "missing_tool") from None
     except subprocess.TimeoutExpired:
@@ -152,7 +153,7 @@ def remux(path: Path, ext: str) -> None:
     # DASH AAC 是独立 m4s；WebM Opus 也需换成可写标签的音频容器。
     output = path.with_suffix(".remux.part")
     try:
-        result = subprocess.run(["ffmpeg", "-v", "error", "-xerror", "-i", str(path), "-map", "0:a:0", "-c:a", "copy", "-f", "ipod" if ext == "m4a" else "opus", "-y", str(output)], capture_output=True, timeout=120)
+        result = subprocess.run([require_tool("ffmpeg"), "-v", "error", "-xerror", "-i", str(path), "-map", "0:a:0", "-c:a", "copy", "-f", "ipod" if ext == "m4a" else "opus", "-y", str(output)], capture_output=True, timeout=120)
         if result.returncode:
             raise SongSeekError("音频容器转换失败", "invalid_audio")
         output.chmod(path.stat().st_mode & 0o777)
@@ -162,8 +163,10 @@ def remux(path: Path, ext: str) -> None:
 
 
 def publish(partial: Path, target: Path) -> Path:
-    # 同一目录的锁让多进程也不会相互覆盖最终文件。
-    with _publish_lock, (target.parent / ".songseek-publish.lock").open("a+b") as lock:
+    # 同一目录的锁让多进程也不会相互覆盖最终文件。锁文件放在系统临时目录，
+    # 不在用户的音乐文件夹里留下文件（Windows 不隐藏点开头的文件）。
+    key = hashlib.sha1(str(target.parent.resolve()).encode()).hexdigest()[:16]
+    with _publish_lock, (Path(tempfile.gettempdir()) / f"songseek-publish-{key}.lock").open("a+b") as lock:
         if os.name == "nt":
             import msvcrt
             lock.write(b"0")

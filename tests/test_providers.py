@@ -81,6 +81,7 @@ def test_youtube_parsers_and_system_command(config, monkeypatch):
         calls.append((command, kwargs))
         return CompletedProcess(command, 0, json.dumps(data), "")
     monkeypatch.setattr(youtube.subprocess, "run", run)
+    config.settings.proxy_mode = "off"
     monkeypatch.setenv("HTTPS_PROXY", "http://do-not-use.invalid")
     youtube.YouTubeProvider(config).search("晴天 周杰伦", 2)
     command, kwargs = calls[0]
@@ -98,6 +99,7 @@ def test_mock_is_deterministic():
 
 
 def test_http_proxy_and_concurrency(config, monkeypatch):
+    config.settings.proxy_mode = "manual"
     config.settings.proxy = "http://127.0.0.1:7897"
     provider = kugou.KugouProvider(config)
     lock = threading.Lock()
@@ -129,6 +131,7 @@ def test_provider_proxy_policy(config, monkeypatch, provider_class, tmp_path):
     from songseek.config import PROVIDERS
     from songseek.downloader import transfer
     from songseek.models import AudioSource
+    config.settings.proxy_mode = "manual"
     config.settings.proxy = "http://127.0.0.1:7897"
     monkeypatch.setenv("HTTPS_PROXY", "http://wrong.invalid")
     monkeypatch.setattr(bilibili, "_buvid3", "anonymous-device")

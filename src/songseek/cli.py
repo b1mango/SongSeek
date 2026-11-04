@@ -20,6 +20,7 @@ def json_dump(value):
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="songseek", description="觅音：本地歌曲检索、审核与下载")
     commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser("app")
     serve = commands.add_parser("serve")
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--no-open", action="store_true")
@@ -51,6 +52,11 @@ def parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = parser().parse_args()
     try:
+        if args.command == "app":
+            from .desktop import main as desktop_main
+            sys.argv = [sys.argv[0]]
+            desktop_main()
+            return
         if args.command == "serve":
             from .server import create_app
             if not 1 <= args.port <= 65535:
@@ -59,7 +65,7 @@ def main() -> None:
                 timer = threading.Timer(.8, webbrowser.open, args=(f"http://127.0.0.1:{args.port}",))
                 timer.daemon = True
                 timer.start()
-            uvicorn.run(create_app(), host="127.0.0.1", port=args.port, log_level="warning", access_log=False)
+            uvicorn.run(create_app(port=args.port), host="127.0.0.1", port=args.port, log_level="warning", access_log=False)
             return
         if args.command == "verify":
             failed = False

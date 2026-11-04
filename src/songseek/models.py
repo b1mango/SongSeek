@@ -46,6 +46,7 @@ class Settings(Model):
     output_dir: str = "~/Music/SongSeek"
     filename_template: str = "{artist} - {title}"
     group_by_playlist: bool = True
+    proxy_mode: Literal["auto", "manual", "off"] = "auto"
     proxy: str = ""
     search_concurrency: int = Field(default=4, ge=1, le=32)
     download_concurrency: int = Field(default=2, ge=1, le=16)

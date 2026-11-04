@@ -10,6 +10,10 @@ import type {
   Playlist,
   PlaylistSource,
   Provider,
+  ProxyMode,
+  ProxyStatus,
+  ProxyTest,
+  SystemInfo,
   Settings,
   Track,
 } from "./types";
@@ -170,4 +174,9 @@ export const api = {
   settings: () => request<Settings>("/settings"),
   saveSettings: (patch: Partial<Omit<Settings, "netease_cookie_set">> & { netease_cookie?: string }) =>
     request<Settings>("/settings", json("PUT", patch)),
+  proxy: () => request<ProxyStatus>("/proxy"),
+  testProxy: (mode?: ProxyMode, proxy?: string) => request<ProxyTest>("/proxy/test", json("POST", { mode, proxy })),
+  system: () => request<SystemInfo>("/system"),
+  pickFolder: (initial?: string) => request<{ path: string | null }>("/system/pick-folder", json("POST", { initial })),
+  openUrl: (url: string) => request<{ ok: boolean }>("/system/open-url", json("POST", { url })),
 };

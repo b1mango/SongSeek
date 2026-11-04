@@ -4,7 +4,7 @@ import string
 import tempfile
 import threading
 from pathlib import Path
-from urllib.parse import urlsplit
+from .netproxy import validate_proxy
 
 from .errors import SongSeekError
 from .models import ProviderInfo, Settings
@@ -39,7 +39,10 @@ class Config:
         self._lock = threading.RLock()
         self.path = self.home / "settings.json"
         stored = json.loads(self.path.read_text("utf-8")) if self.path.exists() else {}
-        self.settings = Settings(**stored.get("settings", {}))
+        values = stored.get("settings", {})
+        if "proxy_mode" not in values:
+            values["proxy_mode"] = "manual" if values.get("proxy") else "auto"
+        self.settings = Settings(**values)
         self.settings.output_dir = str(Path(self.settings.output_dir).expanduser().resolve())
         self.settings.netease_cookie_set = self.cookie_path.is_file()
         self.providers = [p.model_copy(deep=True) for p in PROVIDERS]
@@ -68,8 +71,10 @@ class Config:
             cookie = values.pop("netease_cookie", None)
             values.pop("netease_cookie_set", None)
             settings = Settings(**(self.settings.model_dump() | values))
-            if settings.proxy and (urlsplit(settings.proxy).scheme not in ("http", "https", "socks5", "socks5h") or not urlsplit(settings.proxy).hostname or urlsplit(settings.proxy).username or urlsplit(settings.proxy).password):
-                raise SongSeekError("代理地址格式不正确", "invalid_settings")
+            try:
+                validate_proxy(settings.proxy)
+            except ValueError:
+                raise SongSeekError("代理地址格式不正确", "invalid_settings") from None
             try:
                 fields = [name for _, name, _, _ in string.Formatter().parse(settings.filename_template) if name is not None]
                 if any(name not in ("artist", "title", "album") for name in fields):

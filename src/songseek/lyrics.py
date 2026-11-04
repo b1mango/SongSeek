@@ -16,6 +16,7 @@ from mutagen.oggvorbis import OggVorbis
 
 from .downloader import digest
 from .lrclib import LRCLib
+from .netproxy import effective_proxy
 from .matching import same_recording
 from .models import LyricsInfo, LyricsResponse, ParsedRow
 from .normalize import artists_match, title_key, tolerance, version_flags
@@ -242,7 +243,7 @@ class LyricsManager:
             if response:
                 return response
         if duration is not None and time.monotonic() < deadline:
-            source = LRCLib(service.config.settings.proxy)
+            source = LRCLib(effective_proxy(service.config.settings) or "")
             result = self._request(None, lambda: source.lyrics(track, duration, deadline), deadline)
             response = accept(result, "lrclib", "LRCLIB")
             if response:

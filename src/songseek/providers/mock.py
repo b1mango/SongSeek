@@ -2,6 +2,7 @@ import hashlib
 import subprocess
 import threading
 
+from ..tools import require_tool
 from ..errors import SongSeekError
 from ..models import AudioSource, Health, RawCandidate, now
 from ..query import parse_query
@@ -42,8 +43,13 @@ class MockProvider(BaseProvider):
         path = directory / f"{candidate.source_id}.mp3"
         with self._file_lock, self.semaphore:
             if not path.exists():
-                subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
-                                "-t", str(candidate.duration), "-c:a", "libmp3lame", "-b:a", f"{candidate.bitrate}k", "-y", str(path)], check=True, capture_output=True, timeout=60)
+                partial = path.with_suffix(".part.mp3")
+                try:
+                    subprocess.run([require_tool("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
+                                    "-t", str(candidate.duration), "-c:a", "libmp3lame", "-b:a", f"{candidate.bitrate}k", "-y", str(partial)], check=True, capture_output=True, timeout=60)
+                    partial.replace(path)
+                finally:
+                    partial.unlink(missing_ok=True)
         return AudioSource(url=path.as_uri(), ext="mp3", bitrate=candidate.bitrate, local_path=str(path))
 
     def health(self) -> Health:
