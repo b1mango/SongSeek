@@ -85,9 +85,11 @@ class CoverManager:
         alternatives = [candidate for candidate in self.service.candidates(track.id)
                         if candidate.id != chosen.id and candidate.verdict != "reject"]
         alternatives.sort(key=lambda candidate: not same_recording(track, chosen, candidate))
+        return self.raws([self.service.raw_candidate(candidate.id) for candidate in [chosen] + alternatives])
+
+    def raws(self, raws) -> tuple[bytes, str]:
         attempted = set()
-        for candidate in [chosen] + alternatives:
-            raw = self.service.raw_candidate(candidate.id)
+        for raw in raws:
             url = raw.extra.get("cover_url")
             key = (raw.provider, url)
             if not url or key in attempted:

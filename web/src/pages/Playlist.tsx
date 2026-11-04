@@ -15,7 +15,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { api } from "../api";
-import { Flags, LrcToggle, LyricsTag, StatusBadge, toneOfScore, useToast } from "../components";
+import { Flags, LrcSwitch, LyricsTag, StatusBadge, toneOfScore, useLyricsDefault, useToast } from "../components";
 import { fmtDuration } from "../format";
 import { PlayButton } from "../player";
 import { href, navigate } from "../router";
@@ -133,7 +133,6 @@ export function PlaylistPage({ id }: { id: number }) {
           </p>
         </div>
         <div className="row gap-8">
-          <LrcToggle />
           {c.done > 0 && (
             <button className="btn" disabled={busy === "lyrics"} onClick={fillLyrics} title="给已下载但还没有歌词的歌补上 .lrc 歌词">
               {busy === "lyrics" ? <LoaderCircle className="spin" size={16} /> : <ScrollText size={16} />} 补歌词
@@ -243,6 +242,7 @@ export function PlaylistPage({ id }: { id: number }) {
                   })
                 }
                 onReveal={() => api.reveal(t.id).catch((e) => toast("bad", e.message))}
+                onUpdate={(next) => setTracks((xs) => (xs ? xs.map((x) => (x.id === next.id ? next : x)) : xs))}
               />
             ))}
           </tbody>
@@ -324,7 +324,19 @@ function NextSteps({
   return <div className="next-steps">{steps}</div>;
 }
 
-function TrackRow({ t, checked, onCheck, onReveal }: { t: Track; checked: boolean; onCheck: () => void; onReveal: () => void }) {
+function TrackRow({
+  t,
+  checked,
+  onCheck,
+  onReveal,
+  onUpdate,
+}: {
+  t: Track;
+  checked: boolean;
+  onCheck: () => void;
+  onReveal: () => void;
+  onUpdate: (t: Track) => void;
+}) {
   const reviewable = t.candidate_count > 0 || t.status === "not_found";
   const go = () => reviewable && navigate({ page: "review", id: t.playlist_id, track: t.id });
   return (
@@ -371,6 +383,7 @@ function TrackRow({ t, checked, onCheck, onReveal }: { t: Track; checked: boolea
         )}
       </td>
       <td className="num row-actions" onClick={(e) => e.stopPropagation()}>
+        {t.status !== "skipped" && <TrackLrc t={t} onUpdate={onUpdate} />}
         {t.file && (
           <>
             <PlayButton playable={{ key: `t:${t.id}`, url: api.audioUrl(t.id), title: t.title, subtitle: `${t.artist} · 已下载`, lyricsUrl: api.trackLyricsUrl(t.id), coverUrl: api.trackCoverUrl(t.id) }} size={28} />
@@ -387,4 +400,46 @@ function TrackRow({ t, checked, onCheck, onReveal }: { t: Track; checked: boolea
       </td>
     </tr>
   );
+}
+
+/**
+ * Per-track LRC switch. Not downloaded yet: whether this song's download saves lyrics
+ * (stored on the track, defaulting to the global setting). Downloaded: whether lyrics
+ * exist; clicking an unlit one looks them up now.
+ */
+function TrackLrc({ t, onUpdate }: { t: Track; onUpdate: (t: Track) => void }) {
+  const toast = useToast();
+  const lyricsDefault = useLyricsDefault();
+  const [busy, setBusy] = useState(false);
+  const info = t.file?.lyrics;
+  const saved = !!info && !info.error && !!(info.path || info.embedded);
+
+  async function act() {
+    setBusy(true);
+    try {
+      if (t.file) {
+        const next = await api.trackLyrics(t.id, true);
+        onUpdate(next);
+        const got = next.file?.lyrics;
+        if (got && !got.error && (got.path || got.embedded)) toast("ok", `「${t.title}」已保存歌词（${got.source_label ?? "歌词"}）`);
+        else toast("info", got?.error ?? `没有找到「${t.title}」的歌词`);
+      } else onUpdate(await api.updateTrack(t.id, { lyrics_wanted: !(t.lyrics_wanted ?? lyricsDefault) }));
+    } catch (e) {
+      toast("bad", (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (t.file)
+    return (
+      <LrcSwitch
+        on={saved}
+        busy={busy}
+        onToggle={() => (saved ? toast("info", `歌词已保存（${info?.source_label ?? "LRC"}）`) : act())}
+        title={saved ? "已保存歌词" : "还没有歌词，点击查找并保存"}
+      />
+    );
+  const on = t.lyrics_wanted ?? lyricsDefault;
+  return <LrcSwitch on={on} busy={busy} onToggle={act} title={on ? "下载时一起保存 .lrc 歌词（点击取消）" : "只下载音频（点击同时保存歌词）"} />;
 }

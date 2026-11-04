@@ -65,18 +65,6 @@ export function setLyricsPref(on: boolean) {
   set({ lyricsPref: on });
 }
 
-/** Flip the "download lyrics too" switch; optimistic, rolls back if the save fails. */
-export async function toggleLyricsPref() {
-  const next = !(state.lyricsPref ?? true);
-  set({ lyricsPref: next });
-  try {
-    set({ lyricsPref: (await api.saveSettings({ lyrics: next })).lyrics ?? next });
-  } catch (e) {
-    set({ lyricsPref: !next });
-    throw e;
-  }
-}
-
 export async function refreshPlaylists() {
   set({ playlists: await api.playlists() });
 }

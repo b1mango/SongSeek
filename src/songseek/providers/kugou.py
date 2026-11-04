@@ -4,7 +4,7 @@ import html
 
 from ..errors import SongSeekError
 from ..models import AudioSource, Lyrics, RawCandidate
-from ..normalize import artists_match, title_key, tolerance, version_flags
+from ..normalize import artists_match, key, title_key, tolerance, version_flags
 from .base import BaseProvider, audio_url
 
 
@@ -34,11 +34,37 @@ class KugouProvider(BaseProvider):
     def search(self, query: str, limit: int = 15) -> list[RawCandidate]:
         return parse_search(self.request("GET", "https://songsearch.kugou.com/song_search_v2", params={"keyword": query, "page": 1, "pagesize": limit}))[:limit]
 
+    def artist_lookup(self, query: str) -> dict | None:
+        data = self.request("GET", "http://mobilecdn.kugou.com/api/v3/search/singer",
+                            params={"keyword": query, "pagesize": 5}, timeout=.8)
+        for artist in data.get("data", []):
+            if key(query) == key(artist["singername"]):
+                return {"id": str(artist["singerid"]), "name": artist["singername"], "aliases": [],
+                        "cover_url": None, "provider": self.id}
+        return None
+
+    def artist_songs(self, artist: dict) -> list[RawCandidate]:
+        data = self.request("GET", "http://mobilecdn.kugou.com/api/v3/singer/song", params={
+            "singerid": artist["id"], "page": 1, "pagesize": 100, "sorttype": 2})
+        if data.get("status") != 1:
+            raise SongSeekError("酷狗歌手热门歌曲获取失败", "provider_error")
+        songs = []
+        for song in data.get("data", {}).get("info", []):
+            singer, separator, title = html.unescape(song["filename"]).partition(" - ")
+            if not separator:
+                continue
+            songs.append(RawCandidate(self.id, song["hash"], title, singer,
+                                      album=song.get("album_name", ""), duration=song.get("duration") or None,
+                                      bitrate=song.get("bitrate") or 128,
+                                      extra={"album_id": song.get("album_id", ""),
+                                             "cover_url": song.get("trans_param", {}).get("union_cover", "").replace("{size}", "480")}))
+        return songs
+
     def lyrics(self, raw: RawCandidate) -> Lyrics | None:
         return self._lyrics(raw.title, raw.artist, raw.duration, version_flags(raw.title), raw.source_id)
 
     def lyrics_keyword(self, track, duration: float) -> Lyrics | None:
-        return self._lyrics(track.title, track.artist, duration, track.flags, "")
+        return self._lyrics(track.title, track.artist, duration, version_flags(track.title), "")
 
     def _lyrics(self, title, artist, duration, flags, song_hash) -> Lyrics | None:
         data = self.request("GET", "https://lyrics.kugou.com/search", params={

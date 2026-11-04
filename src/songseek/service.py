@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 
+from .artists import ArtistSongs, merge_songs
 from .config import Config
 from .covers import CoverManager
 from .db import Database
@@ -19,9 +20,9 @@ from .importers import parse_file, parse_text
 from .matching import evaluate, evaluate_candidates, same_recording, sort_candidates
 from .lyrics import LyricsManager, has_lyrics_file
 from .models import Candidate, Health, Job, ParsedRow, Playlist, RawCandidate, STATUSES, Track, now
-from .normalize import version_flags
+from .normalize import title_key, version_flags
 from .providers import create_providers
-from .query import parse_query
+from .query import TRUSTED, detect_artist, parse_query
 from .providers.netease import NeteaseProvider
 
 BUSY = {"searching", "queued", "downloading"}
@@ -39,6 +40,7 @@ class Service:
         self.previews = PreviewCache(self.config)
         self.lyrics = LyricsManager(self)
         self.covers = CoverManager(self)
+        self.artist_songs = ArtistSongs(self)
         self._locks_guard = threading.Lock()
         self._locks: dict[int, threading.RLock] = {}
         self._recover()
@@ -152,7 +154,7 @@ class Service:
         with self.lock(identifier):
             track = self.track(identifier)
             self.ensure_idle(track)
-            changed = any(k != "note" and getattr(track, k) != v for k, v in values.items())
+            changed = any(k not in ("note", "lyrics_wanted") and getattr(track, k) != v for k, v in values.items())
             data = track.model_dump() | values
             if changed:
                 with self.db.transaction() as connection:
@@ -209,7 +211,7 @@ class Service:
                 self.db.save("candidates", candidate.model_dump())
         return ranked
 
-    def search_track(self, track_id: int, query: str | None = None, providers: list[str] | None = None, *, in_job: bool = False, infer_query: bool = False, on_event: Callable[[dict], None] | None = None) -> dict:
+    def search_track(self, track_id: int, query: str | None = None, providers: list[str] | None = None, *, in_job: bool = False, infer_query: bool = False, on_event: Callable[[dict], None] | None = None, prepared=None) -> dict:
         with self.lock(track_id):
             track = self.track(track_id)
             if not in_job:
@@ -224,12 +226,15 @@ class Service:
             futures = {}
             try:
                 infos = {p.id: p for p in self.config.providers}
-                if on_event:
+                if on_event and prepared is None:
                     on_event({"type": "start", "track_id": track_id,
                               "providers": [{"id": p, "label": infos[p].label} for p in enabled]})
                 first_query = query or f"{track.title} {track.artist}".strip()
-                deadline = time.monotonic() + SEARCH_TIMEOUT
-                futures = {self.provider_pool.submit(self._search_provider, p, first_query, deadline): p for p in enabled}
+                if prepared is None:
+                    deadline = time.monotonic() + SEARCH_TIMEOUT
+                    futures = {self.provider_pool.submit(self._search_provider, p, first_query, deadline): p for p in enabled}
+                else:
+                    futures, deadline = prepared
                 fallback = set()
                 found, errors = {}, []
 
@@ -249,7 +254,7 @@ class Service:
                                   "ok": error is None, "error": error,
                                   "candidates": [c.model_dump() for c in ranked]})
 
-                while futures and time.monotonic() < deadline:
+                while futures and (time.monotonic() < deadline or any(f.done() for f in futures)):
                     completed, _ = wait(futures, timeout=max(0, deadline - time.monotonic()), return_when=FIRST_COMPLETED)
                     for future in completed:
                         provider_id = futures.pop(future)
@@ -291,14 +296,142 @@ class Service:
                 self.save_track(track)
                 raise
 
-    def search_one(self, query: str, duration: float | None = None, *, on_event: Callable[[dict], None] | None = None) -> dict:
-        title, artist = parse_query(query.strip())
+    def selected_providers(self, providers: list[str] | None) -> list[str]:
+        return [p.id for p in sorted(self.config.providers, key=lambda p: p.order)
+                if p.enabled and (not providers or p.id in providers)]
+
+    def _artist_lookup(self, provider_id: str, query: str, deadline: float):
+        try:
+            provider = self.providers[provider_id]
+            with provider.search_budget(deadline):
+                return provider.artist_lookup(query)
+        except Exception:
+            return None
+
+    def _artist_hot(self, provider_id: str, artist: dict, deadline: float):
+        try:
+            provider = self.providers[provider_id]
+            with provider.search_budget(deadline):
+                return provider.artist_songs(artist), None
+        except Exception as error:
+            return [], log_failure(provider_id, error)
+
+    def _search_artist(self, artist, lookups, initial, on_event):
+        infos = {p.id: p for p in self.config.providers}
+        cover_url = None
+        if artist.get("cover_url"):
+            cover = RawCandidate(artist["provider"], artist["id"], artist["name"],
+                                 extra={"cover_url": artist["cover_url"]})
+            cover_url = f"/api/artist-songs/{self.artist_songs.put([cover])}/cover"
+        if on_event:
+            on_event({"type": "artist", "name": artist["name"], "aliases": artist["aliases"], "cover_url": cover_url})
+        deadline = time.monotonic() + SEARCH_TIMEOUT
+        futures = {self.provider_pool.submit(self._artist_hot, p, lookup, deadline): p for p, lookup in lookups.items()}
+        results = {} if lookups else {p: raws for p, raws in initial.items() if p in TRUSTED}
+        tokens = {}
+
+        def songs():
+            output = []
+            for group in merge_songs(dict(sorted(results.items(), key=lambda item: infos[item[0]].order)), artist):
+                identities = [(r.provider, r.source_id) for r in group]
+                token = next((tokens[i] for i in identities if i in tokens), None)
+                token = self.artist_songs.put(group, token)
+                tokens.update(dict.fromkeys(identities, token))
+                output.append(self.artist_songs.describe(group, token))
+            return output
+
+        merged = songs()
+        if on_event and merged:
+            on_event({"type": "artist_songs", "songs": merged})
+        while futures and time.monotonic() < deadline:
+            completed, _ = wait(futures, timeout=max(0, deadline - time.monotonic()), return_when=FIRST_COMPLETED)
+            for future in completed:
+                provider_id = futures.pop(future)
+                raws, error = future.result()
+                if not error:
+                    results[provider_id] = raws
+                merged = songs()
+                if on_event:
+                    on_event({"type": "source", "provider": provider_id, "label": infos[provider_id].label,
+                              "ok": error is None, "error": error})
+                    on_event({"type": "artist_songs", "songs": merged})
+        for future, provider_id in futures.items():
+            future.cancel()
+            if on_event:
+                on_event({"type": "source", "provider": provider_id, "label": infos[provider_id].label,
+                          "ok": False, "error": "搜索超时"})
+        if on_event:
+            on_event({"type": "artist_done", "songs": merged})
+        return {"mode": "artist", "artist": {"name": artist["name"], "aliases": artist["aliases"]}, "songs": merged}
+
+    def search_one(self, query: str, duration: float | None = None, providers: list[str] | None = None, *,
+                   on_event: Callable[[dict], None] | None = None, song_only: bool = False,
+                   initial_raws: list[RawCandidate] | None = None) -> dict:
+        query = query.strip()
+        enabled = self.selected_providers(providers)
+        trusted = [p for p in enabled if p in TRUSTED]
+        prepared = None
+        if trusted and not song_only:
+            infos = {p.id: p for p in self.config.providers}
+            if on_event:
+                on_event({"type": "start", "track_id": None,
+                          "providers": [{"id": p, "label": infos[p].label} for p in enabled]})
+            deadline = time.monotonic() + SEARCH_TIMEOUT
+            futures = {self.provider_pool.submit(self._search_provider, p, query, deadline): p for p in enabled}
+            lookup_deadline = time.monotonic() + .8
+            lookups = {self.provider_pool.submit(self._artist_lookup, p, query, lookup_deadline): p for p in trusted}
+            catalog = [f for f, p in futures.items() if p in TRUSTED]
+            wait(catalog, timeout=max(0, lookup_deadline - time.monotonic()))
+            wait(lookups, timeout=max(0, lookup_deadline - time.monotonic()))
+            artists = {p: f.result() for f, p in lookups.items() if f.done() and f.result() is not None}
+            for future in lookups:
+                future.cancel()
+            initial = {p: f.result()[0] for f, p in futures.items() if f.done()}
+            raws = [r for rows in initial.values() for r in rows]
+            artist = detect_artist(query, raws, list(artists.values()))
+            pending = {f for f in catalog if not f.done()}
+            while (artist is None and pending and not parse_query(query, raws)[1]
+                   and not any(title_key(r.title) == title_key(query) for r in raws if r.provider in TRUSTED)
+                   and time.monotonic() < deadline):
+                completed, pending = wait(pending, timeout=max(0, deadline - time.monotonic()), return_when=FIRST_COMPLETED)
+                initial = {p: f.result()[0] for f, p in futures.items() if f.done()}
+                raws = [r for rows in initial.values() for r in rows]
+                artist = detect_artist(query, raws, list(artists.values()))
+            if artist:
+                for future, provider_id in futures.items():
+                    future.cancel()
+                    if on_event and provider_id not in artists:
+                        # Sources that don't feed the artist list are simply not needed, not failed.
+                        failures = future.result()[1] if future.done() and not future.cancelled() else []
+                        on_event({"type": "source", "provider": provider_id, "label": infos[provider_id].label,
+                                  "ok": not failures, "error": failures[0] if failures else None,
+                                  "skipped": not (future.done() and not future.cancelled())})
+                return self._search_artist(artist, artists, initial, on_event)
+            prepared = (futures, deadline)
+        title, artist = parse_query(query)
         existing = next((p for p in self.playlists() if p.source == "search" and p.name == "单曲搜索"), None)
         playlist = existing or self.create_playlist("单曲搜索", "search", [])
         with self.db.transaction():
             tracks = self.tracks(playlist.id)
             track = self._add_track(playlist.id, ParsedRow(title=title, artist=artist, duration=duration), max((t.position for t in tracks), default=0) + 1)
-        return self.search_track(track.id, query=query.strip(), infer_query=True, on_event=on_event)
+        if initial_raws:
+            self._rank_search(track, {(r.provider, r.source_id): r for r in initial_raws if r.provider in enabled})
+        result = self.search_track(track.id, query=query, providers=enabled, infer_query=True,
+                                   on_event=on_event, prepared=prepared)
+        return {"mode": "song", **result}
+
+    def download_artist_song(self, token: str, lyrics: bool | None = None, providers: list[str] | None = None) -> dict:
+        raws = self.artist_songs.get(token)
+        raw = raws[0]
+        result = self.search_one(f"{raw.title} - {raw.artist}", raw.duration, providers, song_only=True, initial_raws=raws)
+        track = result["track"]
+        track.lyrics_wanted = lyrics
+        self.save_track(track)
+        job = self.jobs.start("download", track.playlist_id, [track.id]) if track.status == "matched" and track.chosen_by == "auto" else None
+        return {"track": self.track(track.id), "job": job}
+
+    def wants_lyrics(self, track: Track) -> bool:
+        return self.config.settings.lyrics if track.lyrics_wanted is None else track.lyrics_wanted
 
     def download_track(self, track_id: int, *, in_job: bool = False) -> Track:
         with self.lock(track_id):
@@ -320,7 +453,7 @@ class Service:
                     if track.chosen_candidate_id != candidate.id:
                         track.chosen_by = "auto"
                     track.chosen_candidate_id, track.status, track.error = candidate.id, "done", None
-                    if self.config.settings.lyrics:
+                    if self.wants_lyrics(track):
                         track.file.lyrics = self.lyrics.save(track)
                     return self.save_track(track)
                 except Exception as error:
@@ -336,7 +469,7 @@ class Service:
                 self.ensure_idle(track)
             if track.status != "done" or track.file is None:
                 raise SongSeekError("请先下载曲目再获取歌词", "not_downloaded")
-            if not self.config.settings.lyrics or (not force and has_lyrics_file(track)):
+            if (in_job and not self.wants_lyrics(track)) or (not force and has_lyrics_file(track)):
                 return track
             track.file.lyrics = self.lyrics.save(track)
             return self.save_track(track)

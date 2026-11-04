@@ -78,11 +78,11 @@ def test_cookie_is_not_used_on_netease_cdn_or_redirect(config, monkeypatch):
 def test_not_found_failed_and_review(config):
     with TestClient(create_app(config)) as client:
         assert client.post("/api/search", json={"query": "不存在 周杰伦", "duration": 180}).json()["track"]["status"] == "not_found"
-        reviewed = client.post("/api/search", json={"query": "晴天 周杰伦"}).json()
+        reviewed = client.post("/api/search", json={"query": "晴天 - 周杰伦"}).json()
         assert reviewed["track"]["status"] == "needs_review"
         track_id = reviewed["track"]["id"]
         assert client.post("/api/tracks/batch", json={"ids": [track_id], "action": "accept_best"}).json()["updated"][0]["status"] == "matched"
-        failed = client.post("/api/search", json={"query": "失败 周杰伦", "duration": 180}).json()["track"]
+        failed = client.post("/api/search", json={"query": "失败 - 周杰伦", "duration": 180}).json()["track"]
         job = client.post(f"/api/playlists/{failed['playlist_id']}/download", json={"track_ids": [failed["id"]]}).json()
         assert finish(client, job["id"])["failed"] == 1
         track = next(t for t in client.get(f"/api/playlists/{failed['playlist_id']}").json()["tracks"] if t["id"] == failed["id"])
@@ -94,10 +94,10 @@ def test_errors_mapping_mutation_and_dedup(config):
         assert client.get("/api/tracks/999/candidates").json()["error"]["code"] == "not_found"
         result = client.post("/api/import/parse", files={"file": ("a.csv", b"custom,who\nA,B")}, data={"mapping": '{"title":"custom","artist":"who"}'})
         assert result.status_code == 200 and result.json()["rows"][0]["title"] == "A"
-        result = client.post("/api/search", json={"query": "晴天 周杰伦", "duration": 180}).json()
+        result = client.post("/api/search", json={"query": "晴天 - 周杰伦", "duration": 180}).json()
         identifier = result["track"]["id"]
         before = [c["id"] for c in result["candidates"]]
-        after = client.post(f"/api/tracks/{identifier}/search", json={}).json()
+        after = client.post(f"/api/tracks/{identifier}/search", json={"query": "晴天 - 周杰伦"}).json()
         assert before == [c["id"] for c in after["candidates"]]
         updated = client.patch(f"/api/tracks/{identifier}", json={"duration": None, "note": "备注"}).json()
         assert updated["status"] == "pending" and updated["candidate_count"] == 0
@@ -110,7 +110,7 @@ def test_preview_proxies_range_and_provider_headers(config, monkeypatch):
     import httpx
     from songseek.models import AudioSource
     with TestClient(create_app(config)) as client:
-        result = client.post("/api/search", json={"query": "晴天 周杰伦", "duration": 180}).json()
+        result = client.post("/api/search", json={"query": "晴天 - 周杰伦", "duration": 180}).json()
         identifier = result["candidates"][0]["id"]
         provider = client.app.state.service.providers["mock"]
         monkeypatch.setattr(provider, "resolve", lambda raw: AudioSource("https://audio.example/song", {"Referer": "https://required.example/"}))

@@ -120,5 +120,5 @@ def test_repeated_search_errors_are_deduplicated(service, monkeypatch):
     def search(*args):
         raise SongSeekError("上游接口返回 HTTP 500")
     monkeypatch.setattr(service.providers["mock"], "search", search)
-    result = service.search_one("晴天 周杰伦")
+    result = service.search_one("晴天 - 周杰伦")
     assert result["track"].error == "mock：上游接口返回 HTTP 500"

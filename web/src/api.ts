@@ -1,4 +1,6 @@
 import type {
+  ArtistInfo,
+  ArtistSong,
   BatchAction,
   Candidate,
   ColumnKey,
@@ -53,6 +55,10 @@ export type SearchEvent =
   | { type: "start"; track_id: number; providers: { id: string; label: string }[] }
   | { type: "progress"; provider: string; label: string; ok: boolean; error: string | null; candidates: Candidate[] }
   | { type: "done"; track: Track; candidates: Candidate[] }
+  | ({ type: "artist" } & ArtistInfo)
+  | { type: "source"; provider: string; label: string; ok: boolean; error: string | null; skipped?: boolean }
+  | { type: "artist_songs"; songs: ArtistSong[] }
+  | { type: "artist_done"; songs: ArtistSong[] }
   | { type: "error"; message: string };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -97,7 +103,7 @@ export const api = {
   deletePlaylist: (id: number) => request<void>(`/playlists/${id}`, { method: "DELETE" }),
   exportUrl: (id: number) => `/api/playlists/${id}/export.csv`,
 
-  updateTrack: (id: number, patch: Partial<Pick<Track, "title" | "artist" | "album" | "duration" | "note">>) =>
+  updateTrack: (id: number, patch: Partial<Pick<Track, "title" | "artist" | "album" | "duration" | "note" | "lyrics_wanted">>) =>
     request<Track>(`/tracks/${id}`, json("PATCH", patch)),
   deleteTrack: (id: number) => request<void>(`/tracks/${id}`, { method: "DELETE" }),
   candidates: (id: number) => request<Candidate[]>(`/tracks/${id}/candidates`),
@@ -113,10 +119,10 @@ export const api = {
   reveal: (id: number) => request<{ ok: true }>(`/tracks/${id}/reveal`, json("POST")),
 
   /** Streams per-provider results as NDJSON. Throws ApiError("http_404") on servers without streaming. */
-  async searchStream(query: string, duration: number | undefined, onEvent: (event: SearchEvent) => void, signal?: AbortSignal) {
+  async searchStream(query: string, duration: number | undefined, providers: string[] | undefined, onEvent: (event: SearchEvent) => void, signal?: AbortSignal) {
     let res: Response;
     try {
-      res = await fetch("/api/search/stream", { ...json("POST", { query, duration }), signal });
+      res = await fetch("/api/search/stream", { ...json("POST", { query, duration, providers }), signal });
     } catch (error) {
       if ((error as Error).name === "AbortError") throw error;
       throw new ApiError("offline", "连不上本地服务，请确认 songseek serve 正在运行");
@@ -143,10 +149,16 @@ export const api = {
     }
     flush(true);
   },
-  searchOne: (query: string, duration?: number) =>
-    request<{ track: Track; candidates: Candidate[] }>("/search", json("POST", { query, duration })),
+  searchOne: (query: string, duration?: number, providers?: string[]) =>
+    request<
+      | { mode?: "song"; track: Track; candidates: Candidate[] }
+      | { mode: "artist"; artist: ArtistInfo; songs: ArtistSong[] }
+    >("/search", json("POST", { query, duration, providers })),
+  downloadArtistSong: (token: string, lyrics?: boolean, providers?: string[]) =>
+    request<{ track: Track; job: Job | null }>(`/artist-songs/${encodeURIComponent(token)}/download`, json("POST", { lyrics, providers })),
   searchPlaylist: (id: number, trackIds?: number[]) => request<Job>(`/playlists/${id}/search`, json("POST", { track_ids: trackIds })),
-  downloadPlaylist: (id: number, trackIds?: number[]) => request<Job>(`/playlists/${id}/download`, json("POST", { track_ids: trackIds })),
+  downloadPlaylist: (id: number, trackIds?: number[], lyrics?: boolean) =>
+    request<Job>(`/playlists/${id}/download`, json("POST", { track_ids: trackIds, lyrics })),
   playlistLyrics: (id: number) => request<Job>(`/playlists/${id}/lyrics`, json("POST")),
   trackLyrics: (id: number, force = false) => request<Track>(`/tracks/${id}/lyrics`, json("POST", { force })),
   jobs: () => request<Job[]>("/jobs"),

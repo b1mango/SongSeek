@@ -37,7 +37,7 @@ def lrclib_http(monkeypatch):
 
 @pytest.fixture
 def track(service):
-    return service.search_one("晴天 周杰伦", 180)["track"]
+    return service.search_one("晴天 - 周杰伦", 180)["track"]
 
 
 def add_candidate(service, track, provider_id, source_id, **values):
@@ -579,3 +579,81 @@ def test_misses_expire_sooner_than_hits(service, track, monkeypatch):
     assert service.lyrics.preview(track.chosen_candidate_id).synced
     (expires, _), = service.lyrics.cache.values()
     assert expires - time.monotonic() > MISS_TTL
+
+
+@pytest.mark.parametrize("setting,wanted,expected", [(False, None, False), (True, None, True),
+    (False, True, True), (True, True, True), (False, False, False), (True, False, False)])
+def test_track_lyrics_precedence(service, track, tmp_path, monkeypatch, setting, wanted, expected):
+    service.config.settings.lyrics = setting
+    track.lyrics_wanted = wanted
+    service.save_track(track)
+    file = downloaded(service, track.model_copy(deep=True), tmp_path).file
+    track.status = "matched"
+    service.save_track(track)
+    monkeypatch.setattr(service.downloader, "download", lambda *a: file)
+    calls = []
+    monkeypatch.setattr(service.providers["mock"], "lyrics", lambda raw: calls.append(raw) or Lyrics("[00:01]歌词"))
+    result = service.download_track(track.id)
+    assert result.status == "done"
+    assert bool(calls) is expected
+    assert bool(result.file.lyrics and result.file.lyrics.path) is expected
+
+
+def test_explicit_lyrics_works_with_global_and_track_off(service, track, tmp_path, monkeypatch):
+    track = downloaded(service, track, tmp_path)
+    track.lyrics_wanted = False
+    service.save_track(track)
+    service.config.settings.lyrics = False
+    monkeypatch.setattr(service.providers["mock"], "lyrics", lambda raw: Lyrics("[00:01]明确请求"))
+    with TestClient(create_app(service=service)) as client:
+        response = client.post(f"/api/tracks/{track.id}/lyrics")
+        assert response.status_code == 200
+        assert Path(response.json()["file"]["lyrics"]["path"]).is_file()
+
+
+def test_patch_lyrics_keeps_candidates_and_persists(service, track):
+    with TestClient(create_app(service=service)) as client:
+        for wanted in (True, False, None):
+            response = client.patch(f"/api/tracks/{track.id}", json={"lyrics_wanted": wanted})
+            assert response.status_code == 200
+            value = response.json()
+            assert value["lyrics_wanted"] is wanted
+            assert value["chosen_candidate_id"] == track.chosen_candidate_id
+            assert value["status"] == "matched" and value["candidate_count"] == track.candidate_count
+            assert service.db.get("tracks", track.id)["lyrics_wanted"] is wanted
+
+
+@pytest.mark.parametrize("setting,wanted,total", [(True, False, 0), (False, True, 1), (False, None, 0)])
+def test_batch_lyrics_obeys_track_choice(service, track, tmp_path, monkeypatch, setting, wanted, total):
+    track = downloaded(service, track, tmp_path)
+    track.lyrics_wanted = wanted
+    service.save_track(track)
+    service.config.settings.lyrics = setting
+    monkeypatch.setattr(service.providers["mock"], "lyrics", lambda raw: Lyrics("[00:01]批量"))
+    job = service.jobs.start("lyrics", track.playlist_id)
+    assert job.total == total
+    assert service.jobs.wait(job.id).failed == 0
+
+
+@pytest.mark.parametrize("body,expected", [({}, True), ({"lyrics": False}, False), ({"lyrics": None}, None)])
+def test_download_body_applies_before_queue(service, track, monkeypatch, body, expected):
+    track.lyrics_wanted = True
+    service.save_track(track)
+    observed = []
+    monkeypatch.setattr(service, "download_track", lambda track_id, **kw: observed.append(service.track(track_id).lyrics_wanted))
+    with TestClient(create_app(service=service)) as client:
+        response = client.post(f"/api/playlists/{track.playlist_id}/download", json={"track_ids": [track.id], **body})
+        assert response.status_code == 200
+        service.jobs.wait(response.json()["id"])
+        assert observed == [expected]
+
+
+def test_legacy_track_json_migrates(service, track):
+    from songseek.db import Database
+    old = track.model_dump(exclude={"lyrics_wanted"})
+    service.db.save("tracks", old)
+    reopened = Database(service.config.home / "songseek.db")
+    try:
+        assert reopened.get("tracks", track.id)["lyrics_wanted"] is None
+    finally:
+        reopened.close()

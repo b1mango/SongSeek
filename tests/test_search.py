@@ -9,6 +9,13 @@ from songseek.providers.mock import MockProvider
 from songseek.query import parse_query
 
 
+@pytest.fixture
+def catalog(service):
+    service.providers = {"netease": service.providers["mock"]}
+    service.config.providers = [ProviderInfo(id="netease", label="网易云", max_quality="320k", order=0)]
+    return service
+
+
 @pytest.mark.parametrize("query, title, artist", [
     ("Immortals Fall Out Boy", "Immortals", "Fall Out Boy"),
     ("晴天 周杰伦", "晴天", "周杰伦"),
@@ -16,12 +23,12 @@ from songseek.query import parse_query
     ("Dusk Till Dawn ZAYN", "Dusk Till Dawn", "ZAYN"),
     ("七里香", "七里香", ""),
 ])
-def test_single_search_infers_from_results(service, monkeypatch, query, title, artist):
+def test_single_search_infers_from_results(service, catalog, monkeypatch, query, title, artist):
     calls = []
     def search(text, limit):
         calls.append(text)
-        return [RawCandidate(provider="mock", source_id="a", title=title, artist=artist or "周杰伦", duration=180)]
-    monkeypatch.setattr(service.providers["mock"], "search", search)
+        return [RawCandidate(provider="netease", source_id="a", title=title, artist=artist or "周杰伦", duration=180)]
+    monkeypatch.setattr(service.providers["netease"], "search", search)
     result = service.search_one(query, 180)
     assert calls == [query]
     assert (result["track"].title, result["track"].artist) == (title, artist)
@@ -33,23 +40,23 @@ def test_query_explicit_and_unconfirmed():
     assert parse_query("晴天 / 周杰伦") == ("晴天", "周杰伦")
     assert parse_query("Immortals Fall Out Boy") == ("Immortals Fall Out Boy", "")
     assert parse_query("七里香") == ("七里香", "")
-    wrong = RawCandidate(provider="mock", source_id="a", title="Immortal", artist="Boy")
+    wrong = RawCandidate(provider="netease", source_id="a", title="Immortal", artist="Boy")
     assert parse_query("Immortals Fall Out Boy", [wrong]) == ("Immortals Fall Out Boy", "")
 
 
 def test_query_infers_artist_alias():
-    raw = RawCandidate(provider="mock", source_id="a", title="光年之外", artist="G.E.M.邓紫棋")
+    raw = RawCandidate(provider="netease", source_id="a", title="光年之外", artist="G.E.M.邓紫棋")
     assert parse_query("光年之外 邓紫棋", [raw]) == ("光年之外", "邓紫棋")
 
 
-def test_no_duration_consensus_auto_chooses_original_over_covers(service, monkeypatch):
+def test_no_duration_consensus_auto_chooses_original_over_covers(service, catalog, monkeypatch):
     other = MockProvider(service.config)
-    service.providers["other"] = other
-    service.config.providers.append(ProviderInfo(id="other", label="其他", max_quality="128k", order=1))
+    service.providers["kugou"] = other
+    service.config.providers.append(ProviderInfo(id="kugou", label="其他", max_quality="128k", order=1))
     originals = [RawCandidate(provider=p, source_id="original", title="光年之外", artist="G.E.M.邓紫棋", duration=d, bitrate=128)
-                 for p, d in [("mock", 234), ("other", 235)]]
+                 for p, d in [("netease", 234), ("kugou", 235)]]
     covers = [RawCandidate(provider=p, source_id=artist, title="光年之外", artist=artist, duration=234, bitrate=320)
-              for p in ("mock", "other") for artist in ("徐俊雅", "冯提莫", "陶心瑶")]
+              for p in ("netease", "kugou") for artist in ("徐俊雅", "冯提莫", "陶心瑶")]
     for provider_id, provider in service.providers.items():
         monkeypatch.setattr(provider, "search", lambda *a, p=provider_id: [r for r in covers + originals if r.provider == p])
     result = service.search_one("光年之外 邓紫棋")
@@ -60,14 +67,14 @@ def test_no_duration_consensus_auto_chooses_original_over_covers(service, monkey
     assert result["candidates"][0].checks[2].label == "多个音源时长一致 3:54"
 
 
-def test_single_search_prefers_provider_order(service, monkeypatch):
+def test_single_search_prefers_provider_order(service, catalog, monkeypatch):
     other = MockProvider(service.config)
-    service.providers["other"] = other
-    service.config.providers.append(ProviderInfo(id="other", label="其他", max_quality="128k", order=1))
-    monkeypatch.setattr(service.providers["mock"], "search", lambda *a: [RawCandidate(
-        provider="mock", source_id="a", title="Dusk Till Dawn", artist="ZAYN")])
+    service.providers["kugou"] = other
+    service.config.providers.append(ProviderInfo(id="kugou", label="其他", max_quality="128k", order=1))
+    monkeypatch.setattr(service.providers["netease"], "search", lambda *a: [RawCandidate(
+        provider="netease", source_id="a", title="Dusk Till Dawn", artist="ZAYN")])
     monkeypatch.setattr(other, "search", lambda *a: [RawCandidate(
-        provider="other", source_id="b", title="Dusk Till", artist="Dawn ZAYN")])
+        provider="kugou", source_id="b", title="Dusk Till", artist="Dawn ZAYN")])
     result = service.search_one("Dusk Till Dawn ZAYN")
     assert (result["track"].title, result["track"].artist) == ("Dusk Till Dawn", "ZAYN")
 

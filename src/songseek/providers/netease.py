@@ -6,6 +6,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 from ..errors import SongSeekError
+from ..normalize import key
 from ..models import AudioSource, Lyrics, ParsedRow, ParseResult, RawCandidate
 from .base import BaseProvider, audio_url
 
@@ -91,6 +92,22 @@ class NeteaseProvider(BaseProvider):
 
     def search(self, query: str, limit: int = 15) -> list[RawCandidate]:
         return parse_search(self.call("/api/cloudsearch/pc", s=query, type=1, limit=limit, offset=0))[:limit]
+
+    def artist_lookup(self, query: str) -> dict | None:
+        data = self.request("GET", "https://music.163.com/api/search/get",
+                            params={"s": query, "type": 100, "limit": 5}, timeout=.8)
+        for artist in data.get("result", {}).get("artists", []):
+            aliases = artist.get("alias", [])
+            if key(query) in {key(name) for name in [artist["name"], *aliases]}:
+                return {"id": str(artist["id"]), "name": artist["name"], "aliases": aliases,
+                        "cover_url": artist.get("picUrl"), "provider": self.id}
+        return None
+
+    def artist_songs(self, artist: dict) -> list[RawCandidate]:
+        data = self.request("GET", "https://music.163.com/api/artist/top/song", params={"id": artist["id"]})
+        if data.get("code") != 200:
+            raise SongSeekError("网易云歌手热门歌曲获取失败", "provider_error")
+        return [parse_song(song) for song in data.get("songs", [])]
 
     def lyrics(self, raw: RawCandidate) -> Lyrics | None:
         data = self.call("/api/song/lyric", id=raw.source_id, lv=1, tv=-1)

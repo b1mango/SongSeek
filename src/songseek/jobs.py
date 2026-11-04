@@ -38,7 +38,7 @@ class JobManager:
         self.service.db.save("jobs", job.model_dump())
         self.service.events.emit("job", job.model_dump())
 
-    def start(self, kind: str, playlist_id: int, track_ids: list[int] | None = None, *, force: bool = False) -> Job:
+    def start(self, kind: str, playlist_id: int, track_ids: list[int] | None = None, *, force: bool = False, lyrics: bool | None = None, set_lyrics: bool = False) -> Job:
         with self.lock:
             tracks = self.service.tracks(playlist_id)
             by_id = {t.id: t for t in tracks}
@@ -49,7 +49,7 @@ class JobManager:
             if kind == "lyrics":
                 selected = [t for t in tracks if t.status == "done" and t.file
                             and (track_ids is None or t.id in track_ids) and (force or not has_lyrics_file(t))
-                            and self.service.config.settings.lyrics]
+                            and self.service.wants_lyrics(t)]
             if any(t.id in self.reserved for t in selected):
                 raise SongSeekError("曲目已在任务中", "track_busy", 409)
             ids = [t.id for t in selected]
@@ -59,6 +59,8 @@ class JobManager:
             self.cancellations[job.id] = threading.Event()
             if kind == "download":
                 for track in selected:
+                    if set_lyrics:
+                        track.lyrics_wanted = lyrics
                     track.status = "queued"
                     self.service.save_track(track)
             self.save(job)

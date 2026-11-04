@@ -17,7 +17,7 @@ from mutagen.oggvorbis import OggVorbis
 from .downloader import digest
 from .lrclib import LRCLib
 from .matching import same_recording
-from .models import LyricsInfo, LyricsResponse
+from .models import LyricsInfo, LyricsResponse, ParsedRow
 from .normalize import artists_match, title_key, tolerance, version_flags
 
 LYRICS_TIMEOUT = 8
@@ -176,12 +176,19 @@ class LyricsManager:
 
     def fetch(self, track, chosen) -> LyricsResponse:
         service = self.service
-        deadline = time.monotonic() + LYRICS_TIMEOUT
         duration = track.file.duration if track.file else chosen.duration or track.duration
         infos = {p.id: p for p in service.config.providers}
         alternatives = sorted((c for c in service.candidates(track.id) if c.id != chosen.id
                                and infos[c.provider].enabled and same_recording(track, chosen, c)),
                               key=lambda c: (infos[c.provider].order, c.rank))
+        return self.fetch_raws(track, [service.raw_candidate(c.id) for c in [chosen] + alternatives], duration)
+
+    def fetch_raws(self, track, raws, duration) -> LyricsResponse:
+        service = self.service
+        deadline = time.monotonic() + LYRICS_TIMEOUT
+        infos = {p.id: p for p in service.config.providers}
+        chosen = raws[0]
+        flags = version_flags(chosen.title)
         fallback = LyricsResponse()
         seen = set()
 
@@ -213,8 +220,8 @@ class LyricsManager:
             result = self._request(provider, lambda: provider.lyrics(raw), deadline)
             return accept(result, raw.provider, infos[raw.provider].label)
 
-        for candidate in [chosen] + alternatives:
-            response = attempt(service.raw_candidate(candidate.id))
+        for raw in raws:
+            response = attempt(raw)
             if response:
                 return response
         if "netease" in service.providers and infos["netease"].enabled and duration is not None and time.monotonic() < deadline:
@@ -223,7 +230,7 @@ class LyricsManager:
             for raw in found or []:
                 if (title_key(raw.title) == title_key(chosen.title) == title_key(track.title)
                         and artists_match(track.artist, raw.artist)
-                        and set(version_flags(raw.title)) == set(chosen.flags) == set(track.flags)
+                        and set(version_flags(raw.title)) == set(flags) == set(version_flags(track.title))
                         and raw.duration is not None and abs(raw.duration - duration) <= tolerance(duration)):
                     response = attempt(raw)
                     if response:
@@ -242,9 +249,15 @@ class LyricsManager:
                 return response
         return fallback
 
+    def artist_song(self, token: str) -> LyricsResponse:
+        raws = self.service.artist_songs.get(token)
+        raw = raws[0]
+        track = ParsedRow(title=raw.title, artist=raw.artist, album=raw.album, duration=raw.duration)
+        return self.fetch_raws(track, raws, raw.duration)
+
     def preview(self, candidate_id: int, *, downloaded_track=None) -> LyricsResponse:
         candidate = self.service.candidate(candidate_id)
-        if not self.service.config.settings.lyrics:
+        if downloaded_track is None and not self.service.config.settings.lyrics:
             return LyricsResponse()
         track = downloaded_track or self.service.track(candidate.track_id)
         # 预览其他候选时应按该候选的时长，而不是已下载文件的时长匹配。

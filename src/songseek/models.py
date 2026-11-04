@@ -95,6 +95,7 @@ class DownloadedFile(Model):
 
 
 class Track(ParsedRow):
+    lyrics_wanted: bool | None = None
     id: int
     playlist_id: int
     position: int

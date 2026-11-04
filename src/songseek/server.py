@@ -42,6 +42,7 @@ class UpdateTrack(Model):
     album: str | None = Field(default=None, max_length=500)
     duration: float | None = Field(default=None, gt=0)
     note: str | None = Field(default=None, max_length=2000)
+    lyrics_wanted: bool | None = None
 
 
 class Choose(Model):
@@ -49,6 +50,7 @@ class Choose(Model):
 
 
 class SearchOne(Model):
+    providers: list[str] | None = None
     query: str = Field(min_length=1, max_length=1000)
     duration: float | None = Field(default=None, gt=0)
 
@@ -60,6 +62,15 @@ class SearchTrack(Model):
 
 class TrackIds(Model):
     track_ids: list[int] | None = None
+
+
+class DownloadRequest(TrackIds):
+    lyrics: bool | None = None
+
+
+class ArtistDownload(Model):
+    lyrics: bool | None = None
+    providers: list[str] | None = None
 
 
 class LyricsRequest(Model):
@@ -196,8 +207,8 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
     @app.patch("/api/tracks/{identifier}")
     def update_track(identifier: int, body: UpdateTrack):
         values = body.model_dump(exclude_unset=True)
-        if any(v is None and k != "duration" for k, v in values.items()):
-            raise SongSeekError("只有时长可以设为空值", "invalid_request")
+        if any(v is None and k not in ("duration", "lyrics_wanted") for k, v in values.items()):
+            raise SongSeekError("只有时长和歌词选择可以设为空值", "invalid_request")
         return current().update_track(identifier, values)
 
     @app.delete("/api/tracks/{identifier}")
@@ -247,7 +258,7 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
     def search_one(body: SearchOne):
         if not body.query.strip():
             raise SongSeekError("请输入搜索词", "invalid_query")
-        return current().search_one(body.query, body.duration)
+        return current().search_one(body.query, body.duration, body.providers)
 
     @app.post("/api/search/stream")
     async def search_one_stream(body: SearchOne):
@@ -264,7 +275,7 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
 
             def search():
                 try:
-                    service.search_one(body.query, body.duration, on_event=emit)
+                    service.search_one(body.query, body.duration, body.providers, on_event=emit)
                 except Exception as error:
                     emit({"type": "error", "message": public_error(error)})
 
@@ -277,7 +288,7 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
                 while True:
                     event = await events.get()
                     yield json.dumps(event, ensure_ascii=False) + "\n"
-                    if event["type"] in ("done", "error"):
+                    if event["type"] in ("done", "artist_done", "error"):
                         break
 
         return StreamingResponse(stream(), media_type="application/x-ndjson",
@@ -288,8 +299,9 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
         return current().jobs.start("search", identifier, body.track_ids)
 
     @app.post("/api/playlists/{identifier}/download")
-    def download_playlist(identifier: int, body: TrackIds = TrackIds()):
-        return current().jobs.start("download", identifier, body.track_ids)
+    def download_playlist(identifier: int, body: DownloadRequest = DownloadRequest()):
+        return current().jobs.start("download", identifier, body.track_ids, lyrics=body.lyrics,
+                                    set_lyrics="lyrics" in body.model_fields_set)
 
     @app.get("/api/candidates/{identifier}/cover")
     def candidate_cover(identifier: int):
@@ -326,11 +338,10 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
     def cancel_job(identifier: int):
         return current().jobs.cancel(identifier)
 
-    def open_preview(candidate, request: Request, fallback: bool):
+    def open_preview(raw, label: str, request: Request, fallback: bool):
         service = current()
-        raw = service.raw_candidate(candidate.id)
         provider = service.providers[raw.provider]
-        headers = {"X-Preview-Source": quote(candidate.provider_label, safe="")}
+        headers = {"X-Preview-Source": quote(label, safe="")}
         if fallback:
             headers["X-Preview-Fallback"] = "1"
         source = provider.resolve(raw)
@@ -342,8 +353,8 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
 
         resources = ExitStack()
         try:
-            resources.enter_context(provider.semaphore)
-            client = resources.enter_context(provider.client(timeout=30))
+            resources.enter_context(provider.slot())
+            client = resources.enter_context(provider.client(timeout=provider.remaining(30)))
             upstream_headers = provider.headers() | source.headers
             if request.headers.get("range"):
                 upstream_headers["Range"] = request.headers["range"]
@@ -388,11 +399,28 @@ def create_app(config: Config | None = None, service: Service | None = None) -> 
         errors = []
         for candidate in [chosen] + alternatives[:3]:
             try:
-                return open_preview(candidate, request, candidate.id != chosen.id)
+                return open_preview(service.raw_candidate(candidate.id), candidate.provider_label, request, candidate.id != chosen.id)
             except Exception as error:
                 errors.append(f"{candidate.provider_label}：{public_error(error)}")
         suffix = "已尝试的同版本候选均无法试听" if alternatives else "其他音源没有同一版本可试听"
         raise SongSeekError("；".join(dict.fromkeys(errors + [suffix])), "preview_failed", 502)
+
+    @app.get("/api/artist-songs/{token}/preview")
+    def artist_preview(token: str, request: Request):
+        return current().artist_songs.preview(token, lambda raw, label, fallback: open_preview(raw, label, request, fallback))
+
+    @app.get("/api/artist-songs/{token}/cover")
+    def artist_cover(token: str):
+        data, content_type = current().covers.raws(current().artist_songs.get(token))
+        return Response(data, media_type=content_type, headers={"Cache-Control": "public, max-age=7200"})
+
+    @app.get("/api/artist-songs/{token}/lyrics")
+    def artist_lyrics(token: str):
+        return current().lyrics.artist_song(token)
+
+    @app.post("/api/artist-songs/{token}/download")
+    def artist_download(token: str, body: ArtistDownload = ArtistDownload()):
+        return current().download_artist_song(token, body.lyrics, body.providers)
 
     @app.get("/api/events")
     async def events(request: Request):

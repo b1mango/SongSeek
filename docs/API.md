@@ -54,6 +54,7 @@ interface Track {
   artist: string;         // 可为空字符串，表示清单没给歌手
   album: string;
   duration: number | null;
+  lyrics_wanted: boolean | null; // null 跟随 settings.lyrics，true/false 覆盖全局
   flags: VersionFlag[];   // 从清单歌名解析出的版本标记
   status: TrackStatus;
   chosen_candidate_id: number | null;
@@ -156,7 +157,7 @@ interface ParseResult {
 | PATCH | `/api/playlists/{id}` | `{name}` |
 | DELETE | `/api/playlists/{id}` | 删除清单记录，不删除已下载的文件 |
 | GET | `/api/playlists/{id}/export.csv` | 导出结果 CSV，列为：序号、歌名、歌手、状态、来源、音质、时长、文件路径、备注 |
-| PATCH | `/api/tracks/{id}` | `{title?, artist?, album?, duration?, note?}`，返回 `Track` |
+| PATCH | `/api/tracks/{id}` | `{title?, artist?, album?, duration?, note?, lyrics_wanted?}`，返回 `Track` |
 | DELETE | `/api/tracks/{id}` | 从清单中删除该曲目 |
 | GET | `/api/tracks/{id}/candidates` | `Candidate[]`，按 rank 排序，包含 reject |
 | POST | `/api/tracks/{id}/choose` | `{candidate_id}`，选定候选，status 改为 matched、chosen_by 改为 user，返回 `Track` |
@@ -168,12 +169,67 @@ interface ParseResult {
 ### 搜索与下载
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/search` | 单曲搜索：`{query, duration?}`。在名为「单曲搜索」的清单（source 为 `search`，不存在则自动创建）里新建一首曲目，同步搜索后返回 `{track, candidates}` |
+| POST | `/api/search` | `{query, duration?, providers?: string[]}`，自动识别歌曲或歌手；歌曲返回 `{mode:"song", track, candidates}`，歌手返回 `{mode:"artist", artist:{name,aliases}, songs:ArtistSong[]}` |
 | POST | `/api/playlists/{id}/search` | `{track_ids?}`，省略时搜索所有 pending 和 not_found 的曲目。返回 `Job` |
-| POST | `/api/playlists/{id}/download` | `{track_ids?}`，省略时下载所有 matched 的曲目，只下载 matched。返回 `Job` |
+| POST | `/api/playlists/{id}/download` | `{track_ids?, lyrics?: boolean\|null}`，省略 track_ids 时下载所有 matched 曲目。传 lyrics 时，在入队前为选中曲目设置 lyrics_wanted；省略保留原选择，null 恢复跟随设置。返回 `Job` |
 | GET | `/api/jobs` | 进行中及最近 20 个 `Job[]` |
 | POST | `/api/jobs/{id}/cancel` | 返回 `Job` |
 | GET | `/api/candidates/{id}/preview` | 代理该候选的音频流，用于试听，支持 Range。只接受数据库里已有的候选 ID，不能当作通用代理 |
+
+### 歌曲／歌手搜索及 NDJSON
+
+`POST /api/search/stream` 接受与 `/api/search` 相同的请求体，返回 `application/x-ndjson`。`providers` 缺省或空数组表示全部启用来源；非空数组与已启用来源取交集，未知 ID 被忽略，交集为空时不请求任何来源，不修改全局设置。
+
+查询拆分仅参考网易云、酷狗、QQ（VKeys）的曲名和歌手，支持“歌名 歌手”和“歌手 歌名”以及两种带 ` - ` 的顺序，多来源一致优先。同票按来源顺序；无曲库证据的显式分隔仍按“歌名 - 歌手”解释。歌手识别同时运行精确名称／别名查找与首轮歌曲查询；可信结果存在同名歌曲时优先歌曲模式。
+
+歌曲模式才在「单曲搜索」（source=`search`）中新建 Track。歌手模式不创建 Track 或清单。事件顺序：
+
+```ts
+{type:"start", track_id:number|null, providers:[{id,label}]}
+// 判定类型前发送；尚未创建曲目时 track_id 为 null。使用 done.track.id 获取最终曲目 ID。
+// 歌曲模式：
+{type:"progress", provider, label, ok, error, candidates:Candidate[]}
+{type:"done", track:Track, candidates:Candidate[]}
+// 歌手模式：
+{type:"artist", name:string, aliases:string[], cover_url:string|null}
+{type:"source", provider, label, ok:boolean, error:string|null, skipped?:boolean}  // skipped: 歌手模式下用不到该音源（不是失败）
+{type:"artist_songs", songs:ArtistSong[]}
+{type:"artist_done", songs:ArtistSong[]}
+// 异常：
+{type:"error", message:string}
+```
+
+`source` 可以在 `artist` 前出现，每个来源最终都有状态。`artist_songs` 是完整列表，可随来源完成多次发出；`artist_done` 为终止事件，不再发送 `done`。热门列表使用网易云和酷狗歌手热门接口，QQ（VKeys）未接入歌手歌曲接口；若艺人查找暂不可用而可信歌曲结果达成歌手共识，使用可信结果中的歌曲。过滤现场、DJ、混音、伴奏、翻唱、变速、片段及现场专辑，按规范化歌名、歌手和时长容差合并，以来源热门顺序和热度排序，最多 50 首。
+
+```ts
+interface ArtistSong {
+  token: string;
+  title: string;
+  artist: string;
+  album: string;
+  duration: number | null;
+  popularity: number | null; // 0..1
+  flags: VersionFlag[];     // 已过滤版本，当前为 []
+  providers: {id: string; label: string}[];
+  quality_label: string;
+  preview_url: string;      // /api/artist-songs/<token>/preview
+  cover_url: string;        // /api/artist-songs/<token>/cover
+  lyrics_url: string;       // /api/artist-songs/<token>/lyrics
+}
+```
+
+Token 不透明，候选保存在进程内 LRU（4096 条，2 小时 TTL），重启或淘汰后失效。四个端点均对未知／过期 token 返回 HTTP 404 与 `error.code="not_found"`。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/artist-songs/{token}/preview` | 支持 Range；缓存来源均失败后，以“歌名 歌手”搜索尚未尝试的已启用音源，可信曲库优先、组内按配置顺序，共享 5 秒额外搜索／取流预算。只尝试歌名、歌手、时长容差一致且无额外版本标记的录音，首个成功即返回；回退时返回 `X-Preview-Fallback: 1` 和 URL 编码的来源标签 `X-Preview-Source`。全部失败返回 502 和合并错误 |
+| GET | `/api/artist-songs/{token}/cover` | 复用封面获取与缓存，尝试其他来源；没有可用封面返回 cover_not_found |
+| GET | `/api/artist-songs/{token}/lyrics` | 返回 LyricsResponse，复用同版本来源、网易云、酷狗、LRCLIB 查找链 |
+| POST | `/api/artist-songs/{token}/download` | `{lyrics?: boolean\|null, providers?: string[]}`，按“歌名 - 歌手”（只用所给音源）和已知时长重新执行完整单曲搜索；自动匹配时启动 download Job，否则交给人工审核。返回 `{track:Track, job:Job\|null}` |
+
+国内来源的歌曲、歌手、音频和封面请求均直连，不读取系统代理。
+
+跨源试听成功的候选追加到原 token 的歌曲组，后续试听、封面和歌词请求直接复用；下载时也带入已启用且符合所选音源范围的缓存候选，同时保留完整单曲搜索和自动匹配流程。
 
 ### 封面
 
@@ -192,8 +248,10 @@ interface ParseResult {
 |---|---|---|
 | GET | `/api/candidates/{id}/lyrics` | 试听用歌词，返回 `LyricsResponse` |
 | GET | `/api/tracks/{id}/lyrics` | 已下载曲目：读取旁边的 .lrc，没有时按选定候选查找 |
-| POST | `/api/tracks/{id}/lyrics` | `{force?}`，为已下载曲目保存歌词，返回 `Track` |
+| POST | `/api/tracks/{id}/lyrics` | `{force?}`，显式为已下载曲目保存歌词，即使全局 lyrics 或该曲目 lyrics_wanted 为 false 也执行；已有 .lrc 默认跳过，返回 `Track` |
 | POST | `/api/playlists/{id}/lyrics` | `{force?}`，批量补歌词（默认跳过已有 .lrc 的），返回 `Job`（kind `lyrics`） |
+
+下载和清单批量补歌词遵守 Track.lyrics_wanted：true 强制获取，false 跳过，null 跟随全局。修改此字段不清空候选、不重置状态。CSV 列不变。
 
 设置项：`lyrics`（默认开，下载时保存 .lrc）、`lyrics_translation`（附译文，同时间戳第二行）、`lyrics_embed`（写入音频标签）。
 

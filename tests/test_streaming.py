@@ -45,7 +45,7 @@ def test_stream_flushes_fast_result_before_slow_provider_finishes(service, monke
 
     # TestClient buffers its body; observe ASGI sends as well to prove actual flushing.
     with TestClient(observed) as client:
-        with client.stream("POST", "/api/search/stream", json={"query": "晴天 周杰伦", "duration": 180}) as response:
+        with client.stream("POST", "/api/search/stream", json={"query": "晴天 - 周杰伦", "duration": 180}) as response:
             events = [json.loads(line) for line in response.iter_lines()]
         assert response.headers["content-type"] == "application/x-ndjson"
         assert [e["type"] for e in events] == ["start", "progress", "progress", "done"]
@@ -72,7 +72,7 @@ def test_stream_provider_errors_and_timeout(service, monkeypatch):
     add_provider(service, monkeypatch, "broken", failed)
     try:
         with TestClient(create_app(service=service)) as client:
-            events = [json.loads(line) for line in client.post("/api/search/stream", json={"query": "晴天 周杰伦", "duration": 180}).iter_lines()]
+            events = [json.loads(line) for line in client.post("/api/search/stream", json={"query": "晴天 - 周杰伦", "duration": 180}).iter_lines()]
             release.set()
             progress = {e["provider"]: e for e in events if e["type"] == "progress"}
             assert progress["slow"]["error"] == "搜索超时" and not progress["slow"]["ok"]

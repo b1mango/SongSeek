@@ -74,6 +74,12 @@ class BaseProvider(ABC):
     @abstractmethod
     def resolve(self, candidate: RawCandidate) -> AudioSource: ...
 
+    def artist_lookup(self, query: str) -> dict | None:
+        return None
+
+    def artist_songs(self, artist: dict) -> list[RawCandidate]:
+        return []
+
     def lyrics(self, raw: RawCandidate) -> Lyrics | None:
         return None
 

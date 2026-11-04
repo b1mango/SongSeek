@@ -44,7 +44,7 @@ class LRCLib:
                 continue
             if (title_key(candidate.get("trackName", "")) != title_key(track.title)
                     or not artists_match(track.artist, candidate.get("artistName", ""))
-                    or set(version_flags(candidate.get("trackName", ""))) != set(track.flags)
+                    or set(version_flags(candidate.get("trackName", ""))) != set(version_flags(track.title))
                     or not abs(actual_duration - duration) <= max(tolerance(duration), 6)):
                 continue
             lyrics = self.parse(candidate)

@@ -165,14 +165,14 @@ export function SettingsPage() {
           <div className="check-group">
             <label className="check-line">
               <input type="checkbox" checked={draft.lyrics ?? true} onChange={(e) => set("lyrics", e.target.checked)} />
-              下载时一并保存歌词（同名 .lrc 文件，放在歌曲旁边）
+              默认一并保存歌词（同名 .lrc 文件，放在歌曲旁边；每首歌的 LRC 按钮可以单独开关）
             </label>
-            <label className={`check-line sub${draft.lyrics === false ? " is-disabled" : ""}`}>
-              <input type="checkbox" disabled={draft.lyrics === false} checked={draft.lyrics_translation ?? false} onChange={(e) => set("lyrics_translation", e.target.checked)} />
+            <label className="check-line sub">
+              <input type="checkbox" checked={draft.lyrics_translation ?? false} onChange={(e) => set("lyrics_translation", e.target.checked)} />
               外语歌附上中文翻译（有翻译时，每句原文下面跟一行译文）
             </label>
-            <label className={`check-line sub${draft.lyrics === false ? " is-disabled" : ""}`}>
-              <input type="checkbox" disabled={draft.lyrics === false} checked={draft.lyrics_embed ?? false} onChange={(e) => set("lyrics_embed", e.target.checked)} />
+            <label className="check-line sub">
+              <input type="checkbox" checked={draft.lyrics_embed ?? false} onChange={(e) => set("lyrics_embed", e.target.checked)} />
               同时把歌词写进音频文件（部分播放器只认内嵌歌词）
             </label>
           </div>

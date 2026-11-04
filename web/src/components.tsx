@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
 import { Check, CircleHelp, X, CircleAlert, CircleCheck, Info } from "lucide-react";
 import { FLAG_LABEL, STATUS, fmtDelta, fmtDuration, tolerance, type Tone } from "./format";
-import { toggleLyricsPref, useStore } from "./store";
+import { useStore } from "./store";
 import type { Candidate, CheckItem, LyricsInfo, TrackStatus, VersionFlag } from "./types";
 
 /* ---------------- status ---------------- */
@@ -211,20 +211,31 @@ export function LyricsTag({ info }: { info: LyricsInfo | null | undefined }) {
 }
 
 /** "LRC" switch: lit means downloads also save the matching .lrc lyrics (the global setting). */
-export function LrcToggle({ compact = false }: { compact?: boolean }) {
-  const on = useStore((s) => s.lyricsPref);
-  const toast = useToast();
-  if (on === null) return null;
+/**
+ * Per-song LRC switch: lit = this song's lyrics get saved as .lrc next to it.
+ * Before download it is a choice; after download it shows whether lyrics exist and, when
+ * they don't, clicking fetches them.
+ */
+export function LrcSwitch({ on, busy = false, onToggle, title }: { on: boolean; busy?: boolean; onToggle: () => void; title: string }) {
   return (
     <button
       type="button"
-      className={`lrc-toggle${on ? " is-on" : ""}${compact ? " is-compact" : ""}`}
+      className={`lrc-toggle is-compact${on ? " is-on" : ""}${busy ? " is-busy" : ""}`}
       aria-pressed={on}
-      onClick={() => toggleLyricsPref().catch((e) => toast("bad", (e as Error).message))}
-      title={on ? "下载时一起保存 .lrc 歌词（点击关闭）" : "下载时不保存歌词（点击开启）"}
+      disabled={busy}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+      title={title}
     >
       <span className="lrc-toggle-dot" aria-hidden />
       LRC
     </button>
   );
+}
+
+/** The global "save lyrics" default, used until a song gets its own choice. */
+export function useLyricsDefault(): boolean {
+  return useStore((s) => s.lyricsPref) ?? true;
 }

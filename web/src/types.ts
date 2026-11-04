@@ -58,6 +58,8 @@ export interface Track {
   status: TrackStatus;
   chosen_candidate_id: number | null;
   chosen_by: "auto" | "user" | null;
+  /** Save lyrics with this track's download; null follows the global setting. */
+  lyrics_wanted?: boolean | null;
   best_score: number | null;
   candidate_count: number;
   file: DownloadedFile | null;
@@ -157,3 +159,25 @@ export interface ParseResult {
 }
 
 export type BatchAction = "accept_best" | "skip" | "unskip" | "retry";
+
+/** One song in an artist's popular list; the token addresses it until the server forgets it (~2h). */
+export interface ArtistSong {
+  token: string;
+  title: string;
+  artist: string;
+  album: string;
+  duration: number | null;
+  popularity: number | null;
+  flags: VersionFlag[];
+  providers: { id: string; label: string }[];
+  quality_label: string;
+  preview_url: string;
+  cover_url: string;
+  lyrics_url: string;
+}
+
+export interface ArtistInfo {
+  name: string;
+  aliases: string[];
+  cover_url?: string | null;
+}

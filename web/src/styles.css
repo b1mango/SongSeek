@@ -2498,10 +2498,19 @@ html.lyrics-open .page {
   width: 6px;
   height: 6px;
 }
+/* in table rows the lit state is a soft tint, so a column of them doesn't shout */
 .lrc-toggle.is-compact.is-on {
-  box-shadow:
-    0 0 0 2px var(--label-soft),
-    0 3px 10px -3px color-mix(in srgb, var(--label) 70%, transparent);
+  color: var(--label);
+  background: var(--label-soft);
+  border-color: color-mix(in srgb, var(--label) 45%, transparent);
+  box-shadow: none;
+}
+.lrc-toggle.is-compact.is-on .lrc-toggle-dot {
+  background: var(--label);
+  box-shadow: 0 0 6px 1px color-mix(in srgb, var(--label) 65%, transparent);
+}
+.lrc-toggle.is-compact:not(.is-on) {
+  border-style: dashed;
 }
 
 /* ---------- mini player: cover on the vinyl label, hint to open the full page ---------- */
@@ -3088,5 +3097,224 @@ html.np-open body {
   }
   .np-line {
     transition: none;
+  }
+}
+
+/* ---------- source switches on the search page ---------- */
+button.source-pill {
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background 0.25s var(--ease-out),
+    color 0.25s var(--ease-out),
+    border-color 0.25s var(--ease-out),
+    opacity 0.25s var(--ease-out),
+    transform 0.12s var(--ease-out);
+}
+button.source-pill:active {
+  transform: scale(0.94);
+}
+button.source-pill:focus-visible {
+  outline: 2px solid var(--ok);
+  outline-offset: 2px;
+}
+.source-pill-dot {
+  width: 6px;
+  height: 6px;
+  margin: 0 2px;
+  border-radius: 50%;
+  background: currentColor;
+  transition:
+    background 0.25s var(--ease-out),
+    box-shadow 0.25s var(--ease-out);
+}
+/* enabled, not searched yet: green with a lit dot */
+.source-pill.is-on {
+  background: var(--ok-soft);
+  border-color: color-mix(in srgb, var(--ok) 28%, transparent);
+  color: var(--ok);
+}
+.source-pill.is-on .source-pill-dot {
+  box-shadow: 0 0 5px 1px color-mix(in srgb, var(--ok) 55%, transparent);
+}
+.source-pill.is-pending {
+  background: color-mix(in srgb, var(--ok-soft) 55%, var(--sleeve));
+  border-color: color-mix(in srgb, var(--ok) 28%, transparent);
+  color: var(--ok);
+}
+/* searched but failed: still enabled, so a warm tint rather than the "off" grey */
+.source-pill.is-error {
+  background: var(--warn-soft);
+  border-color: transparent;
+  color: var(--warn);
+}
+/* switched off: grey, hollow dot, dashed outline */
+.source-pill.is-off {
+  background: transparent;
+  border: 1px dashed var(--rule-strong);
+  color: var(--ink-3);
+  opacity: 0.75;
+}
+.source-pill.is-off .source-pill-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+.source-pill.is-off:hover {
+  opacity: 1;
+  border-color: var(--ink-3);
+}
+.source-pill:not(.is-off):hover {
+  border-color: color-mix(in srgb, var(--ok) 55%, transparent);
+}
+.source-pill.is-error:not(.is-off):hover {
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+}
+.source-strip-again {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  font-size: 12px;
+  animation: fade-in 0.25s var(--ease-out) both;
+}
+
+/* ---------- per-row LRC + download ---------- */
+.row-acts {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  white-space: nowrap;
+}
+.row-acts-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 64px;
+  justify-content: center;
+}
+.row-actions > .lrc-toggle {
+  vertical-align: middle;
+}
+.lrc-toggle.is-busy {
+  cursor: progress;
+  opacity: 0.7;
+}
+.lrc-toggle.is-busy .lrc-toggle-dot {
+  animation: lrc-blink 0.8s ease-in-out infinite alternate;
+}
+@keyframes lrc-blink {
+  to {
+    opacity: 0.2;
+  }
+}
+
+/* ---------- artist results ---------- */
+.artist-head {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 20px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background:
+    radial-gradient(120% 160% at 0% 0%, color-mix(in srgb, var(--label-soft) 70%, transparent), transparent 60%),
+    var(--sleeve);
+  box-shadow: var(--shadow);
+}
+.artist-head h2 {
+  margin: 2px 0 4px;
+  font-family: var(--font-display);
+  font-size: 26px;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+}
+.artist-head p {
+  margin: 0;
+}
+.artist-kicker {
+  font: 600 10.5px/1 var(--font-mono);
+  letter-spacing: 0.14em;
+  color: var(--label);
+}
+.artist-avatar {
+  flex: none;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--label), color-mix(in srgb, var(--label) 50%, var(--ink)));
+  color: var(--label-ink);
+  font: 600 28px/1 var(--font-display);
+  box-shadow:
+    0 0 0 3px var(--sleeve),
+    0 0 0 4px var(--rule),
+    0 6px 18px -6px rgba(0, 0, 0, 0.35);
+}
+.artist-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.artist-tip {
+  flex: 0 1 230px;
+  margin: 0;
+  text-align: right;
+  line-height: 1.5;
+}
+.artist-table td.rank-no {
+  width: 34px;
+  padding-right: 0;
+  font-size: 12px;
+}
+.artist-table tbody tr:nth-child(-n + 3) td.rank-no {
+  color: var(--label);
+  font-weight: 600;
+}
+.song-with-cover {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.song-thumb {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: repeating-radial-gradient(circle at 50% 50%, var(--rule) 0 1px, var(--idle-soft) 1px 3px);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.song-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.35s var(--ease-out);
+}
+.song-thumb.is-ok img {
+  opacity: 1;
+}
+.song-thumb.is-loading {
+  animation: sk-pulse 1.4s ease-in-out infinite;
+}
+@keyframes sk-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+@media (max-width: 760px) {
+  .artist-tip {
+    display: none;
+  }
+  .artist-avatar {
+    width: 56px;
+    height: 56px;
+    font-size: 22px;
   }
 }

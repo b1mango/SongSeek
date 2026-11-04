@@ -33,6 +33,10 @@ class Database:
             CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL);
         """)
 
+        with self.transaction() as connection:
+            connection.execute("UPDATE tracks SET data=json_set(data, '$.lyrics_wanted', NULL) "
+                               "WHERE json_type(data, '$.lyrics_wanted') IS NULL")
+
     @contextmanager
     def transaction(self):
         with self.lock:
