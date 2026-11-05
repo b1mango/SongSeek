@@ -447,9 +447,23 @@ class Service:
             choices = [chosen] + sorted((c for c in candidates if c.id != chosen.id and (c.verdict == "match" or same_recording(track, chosen, c))),
                                         key=lambda c: c.needs_member)
             errors = []
+            last_progress = None
+            def progress(phase: str, downloaded: int, total: int | None):
+                nonlocal last_progress
+                current = time.monotonic()
+                complete = total is not None and downloaded >= total
+                if phase == "download":
+                    if not complete and last_progress is not None and current - last_progress < .2:
+                        return
+                    last_progress = current
+                fraction = None if total is None else round(min(1, max(0, downloaded / total)), 3) if total else 1
+                self.events.emit("track_progress", {"track_id": track.id, "playlist_id": track.playlist_id,
+                                                    "phase": phase, "downloaded": downloaded, "total": total,
+                                                    "fraction": fraction})
             for candidate in choices:
                 try:
-                    track.file = self.downloader.download(track, self.raw_candidate(candidate.id), self.providers[candidate.provider], self.playlist(track.playlist_id).name)
+                    track.file = self.downloader.download(track, self.raw_candidate(candidate.id), self.providers[candidate.provider], self.playlist(track.playlist_id).name,
+                                                          on_progress=progress)
                     if track.chosen_candidate_id != candidate.id:
                         track.chosen_by = "auto"
                     track.chosen_candidate_id, track.status, track.error = candidate.id, "done", None

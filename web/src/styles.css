@@ -3533,3 +3533,23 @@ tr.is-flash > td {
   0%, 30% { background: color-mix(in srgb, var(--ok) 22%, transparent); }
   100% { background: transparent; }
 }
+
+/* ---------- per-track download progress: particle wave ---------- */
+.wave-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.wave-canvas {
+  display: block;
+  width: 132px;
+  height: 16px;
+  border-radius: 99px;
+}
+.wave-progress-text {
+  min-width: 4.5em;
+  font-size: 11px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}

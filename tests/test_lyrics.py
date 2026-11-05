@@ -219,7 +219,7 @@ def test_timeout_and_failed_preview_cached_as_null(service, track, monkeypatch):
 
 def test_download_saves_sidecar_after_actual_fallback(service, track, tmp_path, monkeypatch):
     alternate = add_candidate(service, track, "other", "fallback")
-    def download(target, raw, provider, playlist):
+    def download(target, raw, provider, playlist, on_progress=None):
         if raw.provider == "mock":
             raise ValueError("first source unavailable")
         return downloaded(service, target, tmp_path).file
@@ -239,7 +239,7 @@ def test_download_saves_sidecar_after_actual_fallback(service, track, tmp_path, 
 def test_lyrics_failures_never_fail_download(service, track, tmp_path, monkeypatch, failure):
     def fail(*args):
         raise OSError("private upstream details")
-    monkeypatch.setattr(service.downloader, "download", lambda target, *args: downloaded(service, target, tmp_path).file)
+    monkeypatch.setattr(service.downloader, "download", lambda target, *args, **kwargs: downloaded(service, target, tmp_path).file)
     monkeypatch.setattr(service.providers["mock"], "lyrics", fail if failure == "provider" else lambda raw: Lyrics("[00:01]歌词"))
     if failure == "write":
         monkeypatch.setattr(lyrics_module, "atomic_lrc", fail)
@@ -364,7 +364,7 @@ def test_missing_sidecar_is_backfilled(service, track, tmp_path, monkeypatch):
 
 def test_disabled_download_does_not_request_lyrics(service, track, tmp_path, monkeypatch):
     service.config.settings.lyrics = False
-    monkeypatch.setattr(service.downloader, "download", lambda target, *args: downloaded(service, target, tmp_path).file)
+    monkeypatch.setattr(service.downloader, "download", lambda target, *args, **kwargs: downloaded(service, target, tmp_path).file)
     monkeypatch.setattr(service.providers["mock"], "lyrics", lambda raw: pytest.fail("lyrics disabled"))
     result = service.download_track(track.id)
     assert result.status == "done" and result.file.lyrics is None
@@ -590,7 +590,7 @@ def test_track_lyrics_precedence(service, track, tmp_path, monkeypatch, setting,
     file = downloaded(service, track.model_copy(deep=True), tmp_path).file
     track.status = "matched"
     service.save_track(track)
-    monkeypatch.setattr(service.downloader, "download", lambda *a: file)
+    monkeypatch.setattr(service.downloader, "download", lambda *a, **kw: file)
     calls = []
     monkeypatch.setattr(service.providers["mock"], "lyrics", lambda raw: calls.append(raw) or Lyrics("[00:01]歌词"))
     result = service.download_track(track.id)

@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import mutagen
@@ -74,9 +75,13 @@ def verify(path: Path, expected: float | None = None) -> dict:
     return result
 
 
-def transfer(source: AudioSource, target: Path, provider: BaseProvider, max_size: int = 1024 ** 3) -> None:
+def transfer(source: AudioSource, target: Path, provider: BaseProvider, max_size: int = 1024 ** 3,
+             on_progress: Callable[[int, int | None], None] | None = None) -> None:
     if source.local_path:
         shutil.copyfile(source.local_path, target)
+        if on_progress:
+            size = target.stat().st_size
+            on_progress(size, size)
         return
     audio_url(source.url)
     started = time.monotonic()
@@ -93,6 +98,7 @@ def transfer(source: AudioSource, target: Path, provider: BaseProvider, max_size
                 if not matched or int(matched[1]) + 1 != int(matched[2]):
                     raise SongSeekError("音源只返回了部分文件", "incomplete_audio")
                 size = matched[2]
+            total = int(size) if size is not None else None
             count = 0
             with target.open("wb") as stream:
                 for chunk in response.iter_bytes(256 * 1024):
@@ -100,7 +106,9 @@ def transfer(source: AudioSource, target: Path, provider: BaseProvider, max_size
                     if count > max_size or time.monotonic() - started > 600:
                         raise SongSeekError("音频超过大小或下载时间限制", "download_limit")
                     stream.write(chunk)
-            if size is not None and count != int(size):
+                    if on_progress:
+                        on_progress(count, total)
+            if total is not None and count != total:
                 raise SongSeekError("下载大小与音源声明不一致", "incomplete_audio")
 
 
@@ -199,7 +207,8 @@ class Downloader:
     def __init__(self, config: Config):
         self.config = config
 
-    def download(self, track: Track, raw: RawCandidate, provider: BaseProvider, playlist_name: str) -> DownloadedFile:
+    def download(self, track: Track, raw: RawCandidate, provider: BaseProvider, playlist_name: str,
+                 on_progress: Callable[[str, int, int | None], None] | None = None) -> DownloadedFile:
         settings = self.config.settings
         directory = Path(settings.output_dir)
         if settings.group_by_playlist:
@@ -210,7 +219,15 @@ class Downloader:
         os.close(fd)
         try:
             source = provider.resolve(raw)
-            transfer(source, partial, provider)
+            downloaded, total = 0, None
+            def progress(count: int, size: int | None):
+                nonlocal downloaded, total
+                downloaded, total = count, size
+                if on_progress:
+                    on_progress("download", count, size)
+            transfer(source, partial, provider, on_progress=progress if on_progress else None)
+            if on_progress:
+                on_progress("finishing", downloaded, total)
             if raw.provider in ("bilibili", "youtube") and source.ext in ("m4a", "opus"):
                 remux(partial, source.ext)
             info = verify(partial, track.duration if track.duration is not None else raw.duration)

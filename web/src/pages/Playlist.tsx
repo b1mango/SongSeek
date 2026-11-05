@@ -20,6 +20,7 @@ import { fmtDuration } from "../format";
 import { PlayButton } from "../player";
 import { href, navigate, subscribeJobFocus } from "../router";
 import { StatusStrip, matchesFilter, type Filter } from "../StatusStrip";
+import { TrackWave } from "../WaveProgress";
 import { onEvent, removePlaylist, upsertJob, upsertPlaylist, useStore } from "../store";
 import type { BatchAction, Playlist, Track } from "../types";
 
@@ -115,6 +116,11 @@ export function PlaylistPage({ id }: { id: number }) {
       upsertJob(await api.downloadPlaylist(id, ids));
       toast("info", "已开始下载");
     });
+  // One button for the whole list: reveals a selected downloaded song if any, else the first one (same folder).
+  const openFolder = () => {
+    const target = tracks.find((t) => t.file && selected.has(t.id)) ?? tracks.find((t) => t.file);
+    if (target) api.reveal(target.id).catch((e) => toast("bad", e.message));
+  };
   const fillLyrics = () =>
     run("lyrics", async () => {
       upsertJob(await api.playlistLyrics(id));
@@ -162,6 +168,11 @@ export function PlaylistPage({ id }: { id: number }) {
           {c.done > 0 && (
             <button className="btn" disabled={busy === "lyrics"} onClick={fillLyrics} title="给已下载但还没有歌词的歌补上 .lrc 歌词">
               {busy === "lyrics" ? <LoaderCircle className="spin" size={16} /> : <ScrollText size={16} />} 补歌词
+            </button>
+          )}
+          {tracks.some((t) => t.file) && (
+            <button className="btn" onClick={openFolder} title="打开下载文件夹（勾选了歌曲时定位到该首）">
+              <FolderOpen size={16} /> 打开文件夹
             </button>
           )}
           <a className="btn" href={api.exportUrl(id)} download>
@@ -268,7 +279,6 @@ export function PlaylistPage({ id }: { id: number }) {
                     return n;
                   })
                 }
-                onReveal={() => api.reveal(t.id).catch((e) => toast("bad", e.message))}
                 onUpdate={(next) => setTracks((xs) => (xs ? xs.map((x) => (x.id === next.id ? next : x)) : xs))}
               />
             ))}
@@ -356,14 +366,12 @@ function TrackRow({
   flash,
   checked,
   onCheck,
-  onReveal,
   onUpdate,
 }: {
   t: Track;
   flash: boolean;
   checked: boolean;
   onCheck: () => void;
-  onReveal: () => void;
   onUpdate: (t: Track) => void;
 }) {
   const reviewable = t.candidate_count > 0 || t.status === "not_found";
@@ -394,7 +402,8 @@ function TrackRow({
       <td className="num mono">{fmtDuration(t.duration)}</td>
       <td>
         <StatusBadge status={t.status} />
-        {t.status === "searching" || t.status === "downloading" ? <LoaderCircle className="spin inline-spin" size={13} /> : null}
+        {t.status === "searching" && <LoaderCircle className="spin inline-spin" size={13} />}
+        {t.status === "downloading" && <TrackWave trackId={t.id} />}
       </td>
       <td>
         {t.file ? (
@@ -418,12 +427,7 @@ function TrackRow({
       <td className="num row-actions" onClick={(e) => e.stopPropagation()}>
         {t.status !== "skipped" && <TrackLrc t={t} onUpdate={onUpdate} />}
         {t.file && (
-          <>
-            <PlayButton playable={{ key: `t:${t.id}`, url: api.audioUrl(t.id), title: t.title, subtitle: `${t.artist} · 已下载`, lyricsUrl: api.trackLyricsUrl(t.id), coverUrl: api.trackCoverUrl(t.id) }} size={28} />
-            <button className="icon-btn" onClick={onReveal} aria-label="在文件夹中显示" title="在文件夹中显示">
-              <FolderOpen size={15} />
-            </button>
-          </>
+          <PlayButton playable={{ key: `t:${t.id}`, url: api.audioUrl(t.id), title: t.title, subtitle: `${t.artist} · 已下载`, lyricsUrl: api.trackLyricsUrl(t.id), coverUrl: api.trackCoverUrl(t.id) }} size={28} />
         )}
         {reviewable && !t.file && (
           <a className="link-btn" href={href({ page: "review", id: t.playlist_id, track: t.id })}>

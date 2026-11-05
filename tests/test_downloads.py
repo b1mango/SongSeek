@@ -1,4 +1,5 @@
 import subprocess
+import json
 from pathlib import Path
 
 import httpx
@@ -32,7 +33,7 @@ def test_selected_failure_falls_back_to_same_recording(service, monkeypatch, dur
     import json
     alternate.id = service.db.insert("candidates", alternate.model_dump(), track_id=track.id, provider="other", source_id="alternate", raw=json.dumps(raw))
     calls = []
-    def download(target, raw, provider, playlist_name):
+    def download(target, raw, provider, playlist_name, on_progress=None):
         calls.append(raw.source_id)
         if len(calls) == 1:
             raise SongSeekError("取流失败")
@@ -48,7 +49,7 @@ def test_selected_failure_falls_back_to_same_recording(service, monkeypatch, dur
 def test_never_falls_back_to_unrelated_review(service, monkeypatch):
     track, candidates = searched(service)
     calls = []
-    def fail(target, raw, provider, playlist_name):
+    def fail(target, raw, provider, playlist_name, on_progress=None):
         calls.append(raw.source_id)
         raise SongSeekError("取流失败")
     monkeypatch.setattr(service.downloader, "download", fail)
@@ -227,7 +228,7 @@ def test_repeated_download_errors_are_deduplicated(service, monkeypatch):
     alternate = first.model_copy(update={"id": 0, "source_id": "alternate"})
     raw = service.db.raw_candidate(first.id) | {"source_id": "alternate"}
     service.db.insert("candidates", alternate.model_dump(), track_id=target.id, provider="mock", source_id="alternate", raw=json.dumps(raw))
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise SongSeekError("取流失败")
     monkeypatch.setattr(service.downloader, "download", fail)
     result = service.download_track(target.id)
@@ -262,3 +263,95 @@ def test_cover_fetch_is_best_effort(tone, service, monkeypatch, failure):
     assert bool(pictures) == (failure is None)
     if pictures:
         assert pictures[0].data == cover
+
+
+@pytest.mark.parametrize("status, headers, total", [
+    (200, {"content-length": "524288"}, 524288),
+    (206, {"content-range": "bytes 0-524287/524288"}, 524288),
+    (200, {}, None),
+])
+def test_transfer_progress(service, tmp_path, monkeypatch, status, headers, total):
+    provider = service.providers["mock"]
+    content = b"a" * (512 * 1024)
+    def handle(request):
+        return httpx.Response(status, headers=headers, stream=httpx.ByteStream(content))
+    monkeypatch.setattr(provider, "client", lambda **kwargs: httpx.Client(transport=httpx.MockTransport(handle)))
+    calls = []
+    target = tmp_path / "audio.part"
+    def progress(downloaded, size):
+        calls.append((downloaded, size))
+    transfer(AudioSource("https://audio.example/song"), target, provider, on_progress=progress)
+    assert calls == [(256 * 1024, total), (512 * 1024, total)]
+    assert target.read_bytes() == content
+
+
+@pytest.mark.parametrize("total", [3000, None])
+def test_track_progress_payload_and_throttle(service, monkeypatch, total):
+    target, _ = searched(service)
+    listener = service.events.subscribe()
+    clock = [0.0]
+    monkeypatch.setattr("songseek.service.time.monotonic", lambda: clock[0])
+    def download(track, raw, provider, playlist_name, on_progress):
+        for timestamp, downloaded in [(0, 1000), (.1, 1500), (.25, 2000), (.26, 3000)]:
+            clock[0] = timestamp
+            on_progress("download", downloaded, total)
+        on_progress("finishing", 3000, total)
+        return DownloadedFile(path="/tmp/test.mp3", size=3000, format="mp3", bitrate=192, duration=180, sha256="test")
+    monkeypatch.setattr(service.downloader, "download", download)
+    result = service.download_track(target.id)
+    assert result.status == "done"
+    events = []
+    while not listener.empty():
+        kind, data = listener.get_nowait().strip().split("\n")
+        events.append((kind.removeprefix("event: "), json.loads(data.removeprefix("data: "))))
+    progress = [data for kind, data in events if kind == "track_progress"]
+    counts = [1000, 2000, 3000] if total else [1000, 2000]
+    expected = [{"track_id": target.id, "playlist_id": target.playlist_id, "phase": "download",
+                 "downloaded": count, "total": total, "fraction": round(count / total, 3) if total else None}
+                for count in counts]
+    expected.append({"track_id": target.id, "playlist_id": target.playlist_id, "phase": "finishing",
+                     "downloaded": 3000, "total": total, "fraction": 1 if total else None})
+    assert progress == expected
+    assert [data["status"] for kind, data in events if kind == "track"] == ["downloading", "done"]
+    assert next(i for i, event in enumerate(events) if event == ("track_progress", expected[-1])) < next(
+        i for i, (kind, data) in enumerate(events) if kind == "track" and data["status"] == "done")
+
+
+def test_downloader_progress_finishing_before_processing(service, tone, monkeypatch):
+    import songseek.downloader as module
+    target, candidates = searched(service, 1)
+    raw = service.raw_candidate(candidates[0].id)
+    raw.provider = "bilibili"
+    provider = service.providers["mock"]
+    monkeypatch.setattr(provider, "resolve", lambda raw: AudioSource(tone.as_uri(), local_path=str(tone), ext="m4a"))
+    calls = []
+    monkeypatch.setattr(module, "remux", lambda *args: calls.append("remux"))
+    actual_verify = module.verify
+    def verify(path, duration):
+        calls.append("verify")
+        return actual_verify(path, duration)
+    monkeypatch.setattr(module, "verify", verify)
+    service.downloader.download(target, raw, provider, "测试", on_progress=lambda *args: calls.append(args))
+    size = tone.stat().st_size
+    assert calls == [("download", size, size), ("finishing", size, size), "remux", "verify"]
+
+
+def test_preview_cache_does_not_emit_progress(service, tone, monkeypatch):
+    import songseek.downloader as module
+    target, candidates = searched(service, 1)
+    raw = service.raw_candidate(candidates[0].id)
+    provider = service.providers["mock"]
+    content = tone.read_bytes()
+    monkeypatch.setattr(provider, "client", lambda **kwargs: httpx.Client(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, content=content))))
+    actual_transfer = module.transfer
+    callbacks = []
+    def transfer(source, target, provider, max_size, on_progress=None):
+        callbacks.append(on_progress)
+        return actual_transfer(source, target, provider, max_size, on_progress)
+    monkeypatch.setattr(module, "transfer", transfer)
+    listener = service.events.subscribe()
+    path = service.previews.get(raw, AudioSource("https://audio.example/song"), provider)
+    assert path.read_bytes() == content
+    assert callbacks == [None]
+    assert listener.empty()

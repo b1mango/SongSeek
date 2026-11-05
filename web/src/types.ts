@@ -68,6 +68,16 @@ export interface Track {
   updated_at: string;
 }
 
+/** SSE `track_progress`: bytes moved for a downloading track; `finishing` = remux/verify/tag after transfer. */
+export interface TrackProgress {
+  track_id: number;
+  playlist_id: number;
+  phase: "download" | "finishing";
+  downloaded: number;
+  total: number | null;
+  fraction: number | null;
+}
+
 export interface CheckItem {
   key: "title" | "artist" | "duration" | "version" | "quality" | "popularity";
   ok: boolean | null;

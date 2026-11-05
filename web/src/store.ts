@@ -1,14 +1,15 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { api } from "./api";
-import type { Job, Playlist, Track } from "./types";
+import type { Job, Playlist, Track, TrackProgress } from "./types";
 
-type EventMap = { track: Track; job: Job; playlist: Playlist };
+type EventMap = { track: Track; job: Job; playlist: Playlist; track_progress: TrackProgress };
 type Handler<K extends keyof EventMap> = (data: EventMap[K]) => void;
 
 const handlers: { [K in keyof EventMap]: Set<Handler<K>> } = {
   track: new Set(),
   job: new Set(),
   playlist: new Set(),
+  track_progress: new Set(),
 };
 
 export function onEvent<K extends keyof EventMap>(type: K, fn: Handler<K>) {
@@ -87,6 +88,8 @@ function connect() {
       const data = JSON.parse((e as MessageEvent).data);
       if (type === "playlist") upsertPlaylist(data);
       if (type === "job") upsertJob(data);
+      if (type === "track_progress") setProgress(data);
+      if (type === "track" && data.status !== "downloading") clearProgress(data.id);
       (handlers[type] as Set<(d: unknown) => void>).forEach((fn) => fn(data));
     });
   }
@@ -97,4 +100,32 @@ export function useLiveConnection() {
     connect();
     return () => source?.close();
   }, []);
+}
+
+/* ---------- per-track download progress (kept apart so a tick only re-renders its own row) ---------- */
+
+const progress = new Map<number, TrackProgress>();
+const progressListeners = new Map<number, Set<() => void>>();
+
+function setProgress(p: TrackProgress) {
+  progress.set(p.track_id, p);
+  progressListeners.get(p.track_id)?.forEach((l) => l());
+}
+
+function clearProgress(trackId: number) {
+  if (progress.delete(trackId)) progressListeners.get(trackId)?.forEach((l) => l());
+}
+
+export function useTrackProgress(trackId: number): TrackProgress | null {
+  return useSyncExternalStore(
+    (l) => {
+      const set = progressListeners.get(trackId) ?? new Set();
+      progressListeners.set(trackId, set.add(l));
+      return () => {
+        set.delete(l);
+        if (!set.size) progressListeners.delete(trackId);
+      };
+    },
+    () => progress.get(trackId) ?? null,
+  );
 }
