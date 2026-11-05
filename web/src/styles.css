@@ -21,6 +21,8 @@
   --bad-soft: #f6dedb;
   --info: #2d5f9a;
   --info-soft: #dfe8f3;
+  --miss: #7a5aa6;
+  --miss-soft: #ece4f4;
   --idle: #8a8174;
   --idle-soft: #ece6da;
 
@@ -57,6 +59,8 @@
     --bad-soft: #3a1f1c;
     --info: #7fa9de;
     --info-soft: #1c2735;
+    --miss: #b59be2;
+    --miss-soft: #292234;
     --idle: #8b8273;
     --idle-soft: #26221d;
     --shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
@@ -200,6 +204,9 @@ kbd {
 }
 .tone-text-bad {
   color: var(--bad);
+}
+.tone-text-miss {
+  color: var(--miss);
 }
 .tone-text-idle {
   color: var(--ink-3);
@@ -784,6 +791,9 @@ input[type="checkbox"] {
   font-size: 12px;
   color: var(--bad);
 }
+.song-error.tone-text-miss {
+  color: var(--miss);
+}
 
 /* ---------- badges, flags, checks, score ---------- */
 .badge {
@@ -823,6 +833,10 @@ input[type="checkbox"] {
 .tone-info {
   --t: var(--info);
   --ts: var(--info-soft);
+}
+.tone-miss {
+  --t: var(--miss);
+  --ts: var(--miss-soft);
 }
 .tone-busy {
   --t: var(--info);
@@ -889,20 +903,15 @@ input[type="checkbox"] {
 }
 
 /* ---------- status strip ---------- */
-.strip {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
 .strip-bar {
   display: flex;
   gap: 2px;
-  height: 8px;
+  height: 6px;
   border-radius: 8px;
   overflow: hidden;
   background: var(--idle-soft);
 }
-.strip.is-compact .strip-bar {
+.strip-bar.is-compact {
   height: 5px;
 }
 .strip-seg {
@@ -1023,6 +1032,9 @@ button.legend-item:hover {
 .step-btn.tone-bad b {
   color: var(--bad);
 }
+.step-btn.tone-miss b {
+  color: var(--miss);
+}
 .next-empty {
   padding: 14px 16px;
   border-radius: var(--radius);
@@ -1037,13 +1049,46 @@ button.legend-item:hover {
   font-weight: 500;
 }
 
-/* ---------- toolbar ---------- */
-.toolbar {
+/* ---------- playlist top + filter bar ---------- */
+.pl-top {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.icon-btn.danger {
+  color: var(--ink-3);
+}
+.icon-btn.danger:hover:not(:disabled) {
+  color: var(--bad);
+  background: var(--bad-soft);
+}
+.filter-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
-  min-height: 36px;
+  margin: -8px -36px -12px;
+  padding: 8px 36px 10px;
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.filter-bar .strip-legend {
+  flex: 1;
+  min-width: 0;
+}
+.filter-bar .search-field {
+  margin-left: auto;
+  width: 240px;
+  flex: none;
 }
 .search-field {
   display: flex;
@@ -1065,12 +1110,19 @@ button.legend-item:hover {
   height: 100%;
 }
 .bulk {
+  position: sticky;
+  bottom: 20px;
+  z-index: 6;
+  align-self: center;
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  padding: 4px 6px 4px 12px;
-  border-radius: var(--radius-sm);
+  margin-top: -8px;
+  padding: 6px 8px 6px 16px;
+  border-radius: 99px;
+  box-shadow: var(--shadow-lift);
+  animation: bulk-in 0.18s ease-out;
   background: var(--ink);
   color: var(--paper);
 }
@@ -1085,6 +1137,15 @@ button.legend-item:hover {
 .bulk .link-btn {
   color: color-mix(in srgb, var(--paper) 70%, transparent);
   margin: 0 6px;
+}
+@keyframes bulk-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.bulk .btn {
+  border-radius: 99px;
 }
 .bulk-count {
   font-weight: 600;
@@ -3534,22 +3595,27 @@ tr.is-flash > td {
   100% { background: transparent; }
 }
 
-/* ---------- per-track download progress: particle wave ---------- */
-.wave-progress {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
+/* ---------- per-track download progress: the whole row turns into a dot-matrix shimmer ---------- */
+.table-wrap {
+  isolation: isolate;
 }
-.wave-canvas {
-  display: block;
-  width: 132px;
-  height: 16px;
-  border-radius: 99px;
+.tracks tr.is-flowing > td.check-col {
+  position: relative;
 }
-.wave-progress-text {
-  min-width: 4.5em;
-  font-size: 11px;
-  color: var(--ink-3);
+.tracks tbody tr.is-flowing td,
+.tracks tbody tr.is-flowing:hover td {
+  background: transparent;
+}
+.row-flow {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.flow-label {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--info);
   white-space: nowrap;
 }

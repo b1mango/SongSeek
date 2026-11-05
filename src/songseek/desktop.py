@@ -126,10 +126,13 @@ def bring_to_front(window):
     AppHelper.callAfter(activate)
 
 
-def hide_on_close(window):
-    """Take the window off screen the moment the close button is clicked; shutdown happens after."""
-    if sys.platform == "darwin" and window.native is not None:
-        window.native.orderOut_(None)
+def quit_on_close(server):
+    """Close button: take the window off screen and exit in the same tick, before AppKit tears the page down."""
+    def closing(window):
+        if sys.platform == "darwin" and window.native is not None:
+            window.native.orderOut_(None)
+        server.quit_now()
+    return closing
 
 
 def system_dark() -> bool:
@@ -205,18 +208,16 @@ class LocalServer:
         self.socket.close()
 
     def quit_now(self):
-        """Window closed: leave within about a second instead of waiting for open streams and running jobs.
+        """Window closed: leave at once instead of waiting for open streams and running jobs.
 
-        Interrupted tracks/jobs are reset on next launch (Service._recover) and files are published atomically,
-        so nothing half-written is left in the music folder.
+        Waiting (even ~1s) keeps the menu bar and Dock icon alive with a blocked main thread, which reads as a
+        stutter. A hard exit is safe: SQLite commits are atomic, interrupted tracks/jobs are reset on next launch
+        (Service._recover) and files are published atomically, so nothing half-written reaches the music folder.
         """
         service = getattr(self.app.state, "service", None)
         if service is not None:
             for event in list(service.jobs.cancellations.values()):
                 event.set()
-        self.server.should_exit = True
-        self.server.force_exit = True
-        self.thread.join(timeout=1)
         if sys.platform != "win32":
             # ffmpeg / yt-dlp children would otherwise keep running after we are gone.
             subprocess.run(["/usr/bin/pkill", "-TERM", "-P", str(os.getpid())], capture_output=True, timeout=2)
@@ -288,7 +289,7 @@ def main():
                 bridge.window = webview.create_window("觅音", server.url, width=1280, height=840,
                                                       min_size=(980, 640), background_color="#14120f" if system_dark() else "#f5f1e8")
                 bridge.window.events.before_show += unify_titlebar
-                bridge.window.events.closing += hide_on_close
+                bridge.window.events.closing += quit_on_close(server)
                 bridge.window.events.shown += bring_to_front
                 bridge.window.events.loaded += bring_to_front
                 webview.start(gui="cocoa" if sys.platform == "darwin" else "edgechromium" if sys.platform == "win32" else None)

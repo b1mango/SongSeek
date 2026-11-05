@@ -24,14 +24,14 @@ export function tolerance(target: number): number {
   return target <= 60 ? 2 : 3;
 }
 
-export type Tone = "ok" | "warn" | "bad" | "info" | "idle" | "busy";
+export type Tone = "ok" | "warn" | "bad" | "info" | "idle" | "busy" | "miss";
 
 export const STATUS: Record<TrackStatus, { label: string; tone: Tone }> = {
   pending: { label: "未搜索", tone: "idle" },
   searching: { label: "搜索中", tone: "busy" },
   matched: { label: "待下载", tone: "info" },
   needs_review: { label: "待审核", tone: "warn" },
-  not_found: { label: "未找到", tone: "bad" },
+  not_found: { label: "未找到", tone: "miss" },
   queued: { label: "排队中", tone: "busy" },
   downloading: { label: "下载中", tone: "busy" },
   done: { label: "已完成", tone: "ok" },

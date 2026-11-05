@@ -1,7 +1,7 @@
 import { ArrowRight, FileUp, Search } from "lucide-react";
 import { SOURCE_LABEL } from "../format";
 import { href } from "../router";
-import { StatusStrip } from "../StatusStrip";
+import { StatusBar } from "../StatusStrip";
 import { useStore } from "../store";
 
 export function HomePage() {
@@ -62,7 +62,7 @@ export function HomePage() {
                 <span className="mono big">{p.counts.done}</span>
                 <span className="muted">/ {p.counts.total} 已完成</span>
               </div>
-              <StatusStrip counts={p.counts} compact />
+              <StatusBar counts={p.counts} compact />
               <div className="pl-card-foot">
                 {review > 0 ? <span className="tone-text-warn">{review} 首待审核</span> : <span className="muted">无待审核</span>}
                 <ArrowRight size={16} aria-hidden />

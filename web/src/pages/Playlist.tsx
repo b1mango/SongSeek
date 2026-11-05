@@ -19,8 +19,8 @@ import { Flags, LrcSwitch, LyricsTag, StatusBadge, toneOfScore, useLyricsDefault
 import { fmtDuration } from "../format";
 import { PlayButton } from "../player";
 import { href, navigate, subscribeJobFocus } from "../router";
-import { StatusStrip, matchesFilter, type Filter } from "../StatusStrip";
-import { TrackWave } from "../WaveProgress";
+import { FlowLabel, RowFlow } from "../RowFlow";
+import { StatusBar, StatusFilters, matchesFilter, type Filter } from "../StatusStrip";
 import { onEvent, removePlaylist, upsertJob, upsertPlaylist, useStore } from "../store";
 import type { BatchAction, Playlist, Track } from "../types";
 
@@ -64,9 +64,7 @@ export function PlaylistPage({ id }: { id: number }) {
       }
       setFlash(target.id);
       requestAnimationFrame(() =>
-        requestAnimationFrame(() =>
-          document.querySelector(`[data-track="${target.id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }),
-        ),
+        requestAnimationFrame(() => document.querySelector(`[data-track="${target.id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" })),
       );
     });
   }, [id, tracks, filter, q]);
@@ -79,9 +77,7 @@ export function PlaylistPage({ id }: { id: number }) {
   const visible = useMemo(() => {
     if (!tracks) return [];
     const needle = q.trim().toLowerCase();
-    return tracks.filter(
-      (t) => matchesFilter(t.status, filter) && (!needle || `${t.title} ${t.artist} ${t.album}`.toLowerCase().includes(needle)),
-    );
+    return tracks.filter((t) => matchesFilter(t.status, filter) && (!needle || `${t.title} ${t.artist} ${t.album}`.toLowerCase().includes(needle)));
   }, [tracks, filter, q]);
 
   if (!playlist || !tracks) {
@@ -139,60 +135,76 @@ export function PlaylistPage({ id }: { id: number }) {
 
   return (
     <div className="page">
-      <header className="page-head">
-        <div className="grow">
-          {renaming ? (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const name = new FormData(e.currentTarget).get("name")?.toString().trim();
-                setRenaming(false);
-                if (name && name !== playlist.name) api.renamePlaylist(id, name).then(upsertPlaylist).catch((er) => toast("bad", er.message));
+      <div className="pl-top">
+        <header className="page-head">
+          <div className="grow">
+            {renaming ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const name = new FormData(e.currentTarget).get("name")?.toString().trim();
+                  setRenaming(false);
+                  if (name && name !== playlist.name)
+                    api
+                      .renamePlaylist(id, name)
+                      .then(upsertPlaylist)
+                      .catch((er) => toast("bad", er.message));
+                }}
+              >
+                <input
+                  name="name"
+                  className="input title-input"
+                  defaultValue={playlist.name}
+                  autoFocus
+                  onBlur={(e) => e.currentTarget.form?.requestSubmit()}
+                />
+              </form>
+            ) : (
+              <h1 className="row gap-8">
+                {playlist.name}
+                <button className="icon-btn ghost" onClick={() => setRenaming(true)} aria-label="重命名">
+                  <Pencil size={15} />
+                </button>
+              </h1>
+            )}
+            <p className="muted">
+              共 {c.total} 首 · 已完成 {c.done}
+              {c.total > 0 && <span className="mono"> · {Math.floor((c.done / c.total) * 100)}%</span>}
+            </p>
+          </div>
+          <div className="head-actions">
+            {c.done > 0 && (
+              <button className="btn" disabled={busy === "lyrics"} onClick={fillLyrics} title="给已下载但还没有歌词的歌补上 .lrc 歌词">
+                {busy === "lyrics" ? <LoaderCircle className="spin" size={16} /> : <ScrollText size={16} />} 补歌词
+              </button>
+            )}
+            {tracks.some((t) => t.file) && (
+              <button className="btn" onClick={openFolder} title="打开下载文件夹（勾选了歌曲时定位到该首）">
+                <FolderOpen size={16} /> 打开文件夹
+              </button>
+            )}
+            <a className="btn" href={api.exportUrl(id)} download>
+              <FileDown size={16} /> 导出结果
+            </a>
+            <button
+              className="icon-btn danger"
+              aria-label="删除清单"
+              title="删除清单（已下载的文件保留）"
+              onClick={() => {
+                if (!confirm(`删除清单「${playlist.name}」？已下载的文件不会被删除。`)) return;
+                run("delete", async () => {
+                  await api.deletePlaylist(id);
+                  removePlaylist(id);
+                  navigate({ page: "home" });
+                });
               }}
             >
-              <input name="name" className="input title-input" defaultValue={playlist.name} autoFocus onBlur={(e) => e.currentTarget.form?.requestSubmit()} />
-            </form>
-          ) : (
-            <h1 className="row gap-8">
-              {playlist.name}
-              <button className="icon-btn ghost" onClick={() => setRenaming(true)} aria-label="重命名">
-                <Pencil size={15} />
-              </button>
-            </h1>
-          )}
-          <p className="muted">
-            共 {c.total} 首 · 已完成 {c.done}
-          </p>
-        </div>
-        <div className="row gap-8">
-          {c.done > 0 && (
-            <button className="btn" disabled={busy === "lyrics"} onClick={fillLyrics} title="给已下载但还没有歌词的歌补上 .lrc 歌词">
-              {busy === "lyrics" ? <LoaderCircle className="spin" size={16} /> : <ScrollText size={16} />} 补歌词
+              <Trash2 size={16} />
             </button>
-          )}
-          {tracks.some((t) => t.file) && (
-            <button className="btn" onClick={openFolder} title="打开下载文件夹（勾选了歌曲时定位到该首）">
-              <FolderOpen size={16} /> 打开文件夹
-            </button>
-          )}
-          <a className="btn" href={api.exportUrl(id)} download>
-            <FileDown size={16} /> 导出结果
-          </a>
-          <button
-            className="btn btn-ghost danger"
-            onClick={() => {
-              if (!confirm(`删除清单「${playlist.name}」？已下载的文件不会被删除。`)) return;
-              run("delete", async () => {
-                await api.deletePlaylist(id);
-                removePlaylist(id);
-                navigate({ page: "home" });
-              });
-            }}
-          >
-            <Trash2 size={16} /> 删除
-          </button>
-        </div>
-      </header>
+          </div>
+        </header>
+        <StatusBar counts={c} />
+      </div>
 
       <NextSteps
         counts={c}
@@ -206,36 +218,12 @@ export function PlaylistPage({ id }: { id: number }) {
         reviewHref={href({ page: "review", id })}
       />
 
-      <StatusStrip counts={c} filter={filter} onFilter={setFilter} />
-
-      <div className="toolbar">
+      <div className="filter-bar">
+        <StatusFilters counts={c} filter={filter} onFilter={setFilter} />
         <label className="search-field">
           <Search size={15} aria-hidden />
-          <input className="input bare" placeholder="在清单里查找" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="input bare" type="search" placeholder="查找歌名、歌手或专辑" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
-        {selectedIds.length > 0 && (
-          <div className="bulk" role="toolbar" aria-label="批量操作">
-            <span className="bulk-count">已选 {selectedIds.length} 首</span>
-            <button className="btn btn-sm" onClick={() => batch("accept_best", selectedIds)}>
-              <ListChecks size={14} /> 通过最佳候选
-            </button>
-            <button className="btn btn-sm" onClick={() => startSearch(selectedIds)}>
-              <Search size={14} /> 重新搜索
-            </button>
-            <button className="btn btn-sm" onClick={() => startDownload(selectedIds)}>
-              <Download size={14} /> 下载
-            </button>
-            <button className="btn btn-sm" onClick={() => batch("skip", selectedIds)}>
-              <SkipForward size={14} /> 跳过
-            </button>
-            <button className="btn btn-sm" onClick={() => batch("unskip", selectedIds)}>
-              <Undo2 size={14} /> 取消跳过
-            </button>
-            <button className="link-btn" onClick={() => setSelected(new Set())}>
-              清除选择
-            </button>
-          </div>
-        )}
       </div>
 
       <div className="table-wrap card flush">
@@ -286,6 +274,30 @@ export function PlaylistPage({ id }: { id: number }) {
         </table>
         {visible.length === 0 && <div className="empty-row muted">没有符合条件的歌曲</div>}
       </div>
+
+      {selectedIds.length > 0 && (
+        <div className="bulk" role="toolbar" aria-label="批量操作">
+          <span className="bulk-count">已选 {selectedIds.length} 首</span>
+          <button className="btn btn-sm" onClick={() => batch("accept_best", selectedIds)}>
+            <ListChecks size={14} /> 通过最佳候选
+          </button>
+          <button className="btn btn-sm" onClick={() => startSearch(selectedIds)}>
+            <Search size={14} /> 重新搜索
+          </button>
+          <button className="btn btn-sm" onClick={() => startDownload(selectedIds)}>
+            <Download size={14} /> 下载
+          </button>
+          <button className="btn btn-sm" onClick={() => batch("skip", selectedIds)}>
+            <SkipForward size={14} /> 跳过
+          </button>
+          <button className="btn btn-sm" onClick={() => batch("unskip", selectedIds)}>
+            <Undo2 size={14} /> 取消跳过
+          </button>
+          <button className="link-btn" onClick={() => setSelected(new Set())}>
+            清除选择
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -344,7 +356,7 @@ function NextSteps({
       </button>
     ),
     c.pending === 0 && c.not_found > 0 && (
-      <button key="n" className="step-btn" disabled={!!busy} onClick={onSearch}>
+      <button key="n" className="step-btn tone-miss" disabled={!!busy} onClick={onSearch}>
         <Search size={18} />
         <span>
           <b>重新搜索未找到的 {c.not_found} 首</b>
@@ -379,10 +391,11 @@ function TrackRow({
   return (
     <tr
       data-track={t.id}
-      className={`${checked ? "is-selected" : ""}${reviewable ? " is-clickable" : ""}${flash ? " is-flash" : ""}`}
+      className={`${checked ? "is-selected" : ""}${reviewable ? " is-clickable" : ""}${flash ? " is-flash" : ""}${t.status === "downloading" ? " is-flowing" : ""}`}
       onClick={go}
     >
       <td className="check-col" onClick={(e) => e.stopPropagation()}>
+        {t.status === "downloading" && <RowFlow trackId={t.id} />}
         <input type="checkbox" checked={checked} onChange={onCheck} aria-label={`选择 ${t.title}`} />
       </td>
       <td className="num mono muted">{t.position}</td>
@@ -393,7 +406,7 @@ function TrackRow({
           </span>
           <span className="song-artist">{t.artist || "未写歌手"}</span>
           {t.error && (t.status === "failed" || t.status === "not_found") && (
-            <span className="song-error">
+            <span className={`song-error${t.status === "not_found" ? " tone-text-miss" : ""}`}>
               <CircleAlert size={12} aria-hidden /> {t.error}
             </span>
           )}
@@ -403,7 +416,7 @@ function TrackRow({
       <td>
         <StatusBadge status={t.status} />
         {t.status === "searching" && <LoaderCircle className="spin inline-spin" size={13} />}
-        {t.status === "downloading" && <TrackWave trackId={t.id} />}
+        {t.status === "downloading" && <FlowLabel trackId={t.id} />}
       </td>
       <td>
         {t.file ? (
@@ -427,7 +440,17 @@ function TrackRow({
       <td className="num row-actions" onClick={(e) => e.stopPropagation()}>
         {t.status !== "skipped" && <TrackLrc t={t} onUpdate={onUpdate} />}
         {t.file && (
-          <PlayButton playable={{ key: `t:${t.id}`, url: api.audioUrl(t.id), title: t.title, subtitle: `${t.artist} · 已下载`, lyricsUrl: api.trackLyricsUrl(t.id), coverUrl: api.trackCoverUrl(t.id) }} size={28} />
+          <PlayButton
+            playable={{
+              key: `t:${t.id}`,
+              url: api.audioUrl(t.id),
+              title: t.title,
+              subtitle: `${t.artist} · 已下载`,
+              lyricsUrl: api.trackLyricsUrl(t.id),
+              coverUrl: api.trackCoverUrl(t.id),
+            }}
+            size={28}
+          />
         )}
         {reviewable && !t.file && (
           <a className="link-btn" href={href({ page: "review", id: t.playlist_id, track: t.id })}>
@@ -460,7 +483,12 @@ function TrackLrc({ t, onUpdate }: { t: Track; onUpdate: (t: Track) => void }) {
         const got = next.file?.lyrics;
         if (got && !got.error && (got.path || got.embedded)) toast("ok", `「${t.title}」已保存歌词（${got.source_label ?? "歌词"}）`);
         else toast("info", got?.error ?? `没有找到「${t.title}」的歌词`);
-      } else onUpdate(await api.updateTrack(t.id, { lyrics_wanted: !(t.lyrics_wanted ?? lyricsDefault) }));
+      } else
+        onUpdate(
+          await api.updateTrack(t.id, {
+            lyrics_wanted: !(t.lyrics_wanted ?? lyricsDefault),
+          }),
+        );
     } catch (e) {
       toast("bad", (e as Error).message);
     } finally {
