@@ -261,6 +261,7 @@ Token 不透明，候选保存在进程内 LRU（4096 条，2 小时 TTL），�
 - `event: track`，data 为 `Track`：任何曲目状态或字段变化时发出。
 - `event: job`，data 为 `Job`：进度变化时发出，同一任务每秒最多 4 次。
 - `event: playlist`，data 为 `Playlist`：counts 变化时发出。
+- `event: track_progress`，data 为 `{track_id, playlist_id, phase: "download" | "finishing", downloaded, total: number | null, fraction: number | null}`：单曲下载中按字节发出，同一首歌至少间隔 0.2 秒，传输完成（`fraction: 1`）必发；传输结束后、转封装 / 校验 / 写标签前发一次 `finishing`。总大小未知时 `total`、`fraction` 为 null。试听缓存不发。下载结束仍以 `track` 事件收尾。
 
 ### 音源与设置
 | 方法 | 路径 | 说明 |
