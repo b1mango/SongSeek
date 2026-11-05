@@ -1,0 +1,169 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- 觅音 app icon: a record lying on a raised paper tile, seen at three-quarter angle, tonearm resting on it. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fdfaf3"/>
+      <stop offset="0.55" stop-color="#f1eadc"/>
+      <stop offset="1" stop-color="#e2d7c2"/>
+    </linearGradient>
+    <linearGradient id="tileRim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#7a6648" stop-opacity="0.28"/>
+    </linearGradient>
+    <radialGradient id="tileGlow" cx="0.38" cy="0.2" r="0.75">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- record -->
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0b0a09"/>
+      <stop offset="0.3" stop-color="#2b2622"/>
+      <stop offset="0.55" stop-color="#3b352f"/>
+      <stop offset="0.8" stop-color="#1c1916"/>
+      <stop offset="1" stop-color="#080706"/>
+    </linearGradient>
+    <radialGradient id="vinyl" cx="0.45" cy="0.42" r="0.62">
+      <stop offset="0" stop-color="#2c2723"/>
+      <stop offset="0.7" stop-color="#191613"/>
+      <stop offset="1" stop-color="#0d0b0a"/>
+    </radialGradient>
+    <linearGradient id="sheenA" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#fff" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="label" cx="0.38" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#f07a55"/>
+      <stop offset="0.55" stop-color="#d4502f"/>
+      <stop offset="1" stop-color="#a5361d"/>
+    </radialGradient>
+    <linearGradient id="labelEdge" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6d220f"/>
+      <stop offset="0.5" stop-color="#9a3219"/>
+      <stop offset="1" stop-color="#5a1c0c"/>
+    </linearGradient>
+    <linearGradient id="chrome" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8f877c"/>
+      <stop offset="0.35" stop-color="#ffffff"/>
+      <stop offset="0.6" stop-color="#d8d1c5"/>
+      <stop offset="1" stop-color="#7d756a"/>
+    </linearGradient>
+
+    <!-- tonearm -->
+    <linearGradient id="tube" gradientUnits="userSpaceOnUse" x1="0" y1="-13" x2="0" y2="13">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.35" stop-color="#e9e3d8"/>
+      <stop offset="0.7" stop-color="#a39a8c"/>
+      <stop offset="1" stop-color="#6e665b"/>
+    </linearGradient>
+    <linearGradient id="baseSide" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8a8276"/>
+      <stop offset="0.4" stop-color="#f3eee6"/>
+      <stop offset="1" stop-color="#6f675c"/>
+    </linearGradient>
+    <radialGradient id="baseTop" cx="0.4" cy="0.35" r="0.8">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#c9c1b4"/>
+    </radialGradient>
+    <linearGradient id="head" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4a433c"/>
+      <stop offset="1" stop-color="#151311"/>
+    </linearGradient>
+
+    <filter id="tileShadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#2c1f10" flood-opacity="0.32"/>
+    </filter>
+    <filter id="blur24" x="-30%" y="-60%" width="160%" height="220%"><feGaussianBlur stdDeviation="24"/></filter>
+    <filter id="blur10" x="-30%" y="-60%" width="160%" height="220%"><feGaussianBlur stdDeviation="10"/></filter>
+    <filter id="blur6" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="6"/></filter>
+    <filter id="blur3" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="3"/></filter>
+
+    <clipPath id="tileClip"><rect x="100" y="100" width="824" height="824" rx="186"/></clipPath>
+    <clipPath id="topClip"><ellipse cx="490" cy="586" rx="330" ry="206"/></clipPath>
+  </defs>
+
+  <!-- raised paper tile -->
+  <g filter="url(#tileShadow)">
+    <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tile)"/>
+  </g>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tileGlow)"/>
+  <rect x="102" y="102" width="820" height="820" rx="184" fill="none" stroke="url(#tileRim)" stroke-width="4"/>
+
+  <g clip-path="url(#tileClip)">
+    <!-- contact shadow under the record -->
+    <ellipse cx="506" cy="660" rx="350" ry="190" fill="#3b2a16" opacity="0.38" filter="url(#blur24)"/>
+    <ellipse cx="496" cy="624" rx="332" ry="200" fill="#1a120a" opacity="0.45" filter="url(#blur10)"/>
+
+    <!-- record thickness: lower rim seen from above -->
+    <ellipse cx="490" cy="612" rx="330" ry="206" fill="url(#edge)"/>
+    <rect x="160" y="586" width="660" height="26" fill="url(#edge)"/>
+    <!-- record top -->
+    <ellipse cx="490" cy="586" rx="330" ry="206" fill="url(#vinyl)"/>
+
+    <g clip-path="url(#topClip)">
+      <!-- grooves -->
+      <g fill="none" stroke="#ffffff" stroke-width="2.2" transform="translate(490 586) scale(1 0.624)">
+        <circle r="316" stroke-opacity="0.10"/>
+        <circle r="296" stroke-opacity="0.05"/>
+        <circle r="276" stroke-opacity="0.08"/>
+        <circle r="254" stroke-opacity="0.05"/>
+        <circle r="232" stroke-opacity="0.08"/>
+        <circle r="208" stroke-opacity="0.06"/>
+        <circle r="186" stroke-opacity="0.09"/>
+        <circle r="166" stroke-opacity="0.05"/>
+      </g>
+      <!-- anisotropic light streaks across the grooves -->
+      <g filter="url(#blur6)">
+        <path d="M490 586 L150 420 L210 330 Z" fill="#ffffff" opacity="0.22"/>
+        <path d="M490 586 L830 752 L770 842 Z" fill="#ffffff" opacity="0.12"/>
+        <path d="M490 586 L560 360 L640 372 Z" fill="#ffffff" opacity="0.07"/>
+      </g>
+      <!-- top-edge bevel catching the light -->
+      <ellipse cx="490" cy="586" rx="327" ry="203" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="3"/>
+    </g>
+
+    <!-- label: a thin raised disc -->
+    <ellipse cx="490" cy="590" rx="122" ry="76" fill="url(#labelEdge)"/>
+    <ellipse cx="490" cy="586" rx="122" ry="76" fill="url(#label)"/>
+    <ellipse cx="490" cy="586" rx="96" ry="60" fill="none" stroke="#ffe7da" stroke-opacity="0.32" stroke-width="2.5"/>
+    <path d="M410 556 Q 450 520 520 518" fill="none" stroke="#fff" stroke-opacity="0.35" stroke-width="5" stroke-linecap="round" filter="url(#blur3)"/>
+
+    <!-- spindle: a small chrome post -->
+    <ellipse cx="490" cy="588" rx="15" ry="9" fill="#1a1612" opacity="0.5" filter="url(#blur3)"/>
+    <rect x="479" y="560" width="22" height="26" fill="url(#chrome)"/>
+    <ellipse cx="490" cy="586" rx="11" ry="6.5" fill="url(#chrome)"/>
+    <ellipse cx="490" cy="560" rx="11" ry="6.5" fill="#f7f3ec"/>
+
+    <!-- tonearm shadow cast on the record -->
+    <path d="M760 330 L700 592 L610 668" fill="none" stroke="#000" stroke-opacity="0.45" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" filter="url(#blur10)"/>
+
+    <!-- tonearm pivot: a short chrome cylinder -->
+    <ellipse cx="780" cy="318" rx="66" ry="40" fill="#2c1f10" opacity="0.35" filter="url(#blur10)"/>
+    <rect x="724" y="262" width="112" height="44" fill="url(#baseSide)"/>
+    <ellipse cx="780" cy="306" rx="56" ry="34" fill="url(#baseSide)"/>
+    <ellipse cx="780" cy="262" rx="56" ry="34" fill="url(#baseTop)"/>
+    <ellipse cx="780" cy="262" rx="24" ry="14" fill="#2a2520"/>
+    <ellipse cx="780" cy="259" rx="16" ry="9" fill="#5c544b"/>
+
+    <!-- tonearm tube (gradient across its width reads as a cylinder) -->
+    <g>
+      <path d="M780 262 L744 500" stroke="#6e665b" stroke-width="24" stroke-linecap="round" fill="none"/>
+      <path d="M744 500 L654 590" stroke="#6e665b" stroke-width="24" stroke-linecap="round" fill="none"/>
+      <path d="M780 262 L744 500" stroke="url(#chrome)" stroke-width="20" stroke-linecap="round" fill="none"/>
+      <path d="M744 500 L654 590" stroke="url(#chrome)" stroke-width="20" stroke-linecap="round" fill="none"/>
+      <path d="M774 270 L740 494" stroke="#fff" stroke-opacity="0.85" stroke-width="5" stroke-linecap="round" fill="none"/>
+      <path d="M738 502 L656 584" stroke="#fff" stroke-opacity="0.7" stroke-width="5" stroke-linecap="round" fill="none"/>
+    </g>
+    <!-- headshell -->
+    <g transform="rotate(-45 640 604)">
+      <rect x="600" y="586" width="80" height="40" rx="9" fill="url(#head)"/>
+      <rect x="600" y="586" width="80" height="12" rx="6" fill="#ffffff" opacity="0.18"/>
+      <rect x="612" y="624" width="30" height="12" rx="3" fill="#0e0c0a"/>
+    </g>
+  </g>
+
+  <!-- crisp tile edge -->
+  <rect x="100.5" y="100.5" width="823" height="823" rx="185.5" fill="none" stroke="#5a4528" stroke-opacity="0.12"/>
+</svg>

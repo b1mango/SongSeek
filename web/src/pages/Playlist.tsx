@@ -18,7 +18,7 @@ import { api } from "../api";
 import { Flags, LrcSwitch, LyricsTag, StatusBadge, toneOfScore, useLyricsDefault, useToast } from "../components";
 import { fmtDuration } from "../format";
 import { PlayButton } from "../player";
-import { href, navigate } from "../router";
+import { href, navigate, subscribeJobFocus } from "../router";
 import { StatusStrip, matchesFilter, type Filter } from "../StatusStrip";
 import { onEvent, removePlaylist, upsertJob, upsertPlaylist, useStore } from "../store";
 import type { BatchAction, Playlist, Track } from "../types";
@@ -48,6 +48,32 @@ export function PlaylistPage({ id }: { id: number }) {
       setTracks((xs) => (xs ? xs.map((x) => (x.id === t.id ? t : x)) : xs));
     });
   }, [id, toast]);
+
+  // Sidebar job card clicked: show the track being worked on, even if the current filter hides it.
+  const [flash, setFlash] = useState<number | null>(null);
+  useEffect(() => {
+    if (!tracks) return;
+    return subscribeJobFocus(id, () => {
+      const target = tracks.find((t) => t.status === "downloading" || t.status === "searching") ?? tracks.find((t) => t.status === "queued");
+      if (!target) return;
+      const needle = q.trim().toLowerCase();
+      if (!matchesFilter(target.status, filter) || (needle && !`${target.title} ${target.artist} ${target.album}`.toLowerCase().includes(needle))) {
+        setFilter("all");
+        setQ("");
+      }
+      setFlash(target.id);
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() =>
+          document.querySelector(`[data-track="${target.id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }),
+        ),
+      );
+    });
+  }, [id, tracks, filter, q]);
+  useEffect(() => {
+    if (flash === null) return;
+    const timer = setTimeout(() => setFlash(null), 1800);
+    return () => clearTimeout(timer);
+  }, [flash]);
 
   const visible = useMemo(() => {
     if (!tracks) return [];
@@ -232,6 +258,7 @@ export function PlaylistPage({ id }: { id: number }) {
               <TrackRow
                 key={t.id}
                 t={t}
+                flash={flash === t.id}
                 checked={selected.has(t.id)}
                 onCheck={() =>
                   setSelected((s) => {
@@ -326,12 +353,14 @@ function NextSteps({
 
 function TrackRow({
   t,
+  flash,
   checked,
   onCheck,
   onReveal,
   onUpdate,
 }: {
   t: Track;
+  flash: boolean;
   checked: boolean;
   onCheck: () => void;
   onReveal: () => void;
@@ -340,7 +369,11 @@ function TrackRow({
   const reviewable = t.candidate_count > 0 || t.status === "not_found";
   const go = () => reviewable && navigate({ page: "review", id: t.playlist_id, track: t.id });
   return (
-    <tr className={`${checked ? "is-selected" : ""}${reviewable ? " is-clickable" : ""}`} onClick={go}>
+    <tr
+      data-track={t.id}
+      className={`${checked ? "is-selected" : ""}${reviewable ? " is-clickable" : ""}${flash ? " is-flash" : ""}`}
+      onClick={go}
+    >
       <td className="check-col" onClick={(e) => e.stopPropagation()}>
         <input type="checkbox" checked={checked} onChange={onCheck} aria-label={`选择 ${t.title}`} />
       </td>

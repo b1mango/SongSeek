@@ -14,7 +14,9 @@ datas += web_data
 hidden = web_hidden + collect_submodules('uvicorn') + collect_submodules('yt_dlp')
 binaries = web_bins + [(str(cache / 'bin' / (name + ('' if mac else '.exe'))), 'bin') for name in ('ffmpeg', 'ffprobe')]
 a = Analysis([str(root / 'packaging' / 'entry.py')], pathex=[str(root / 'src')], binaries=binaries,
-             datas=datas, hiddenimports=hidden, excludes=['pytest', 'tkinter', 'cairosvg', 'resvg_py'])
+             datas=datas, hiddenimports=hidden,
+             excludes=['pytest', 'tkinter', 'cairosvg', 'resvg_py', 'PIL', 'pygments',
+                       'setuptools', 'pkg_resources', '_distutils_hack', 'pydoc_data', 'PyInstaller'])
 pyz = PYZ(a.pure)
 # Console bootloader preserves stdout for yt-dlp/selftest; Finder launches still have no terminal.
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='SongSeek', debug=False,

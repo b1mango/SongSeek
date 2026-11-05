@@ -55,3 +55,27 @@ export function useRoute(): Route {
   }, []);
   return route;
 }
+
+/* "Show me the running job": the sidebar job card asks a playlist page to scroll to the track in progress.
+   Kept as a pending request so it also works when the page mounts only after navigating. */
+let pendingFocus: number | null = null;
+const focusListeners = new Set<(playlistId: number) => void>();
+
+export function requestJobFocus(playlistId: number) {
+  pendingFocus = playlistId;
+  focusListeners.forEach((l) => l(playlistId));
+}
+
+/** Calls `onFocus` now if a request for this playlist is pending, and on every later request. */
+export function subscribeJobFocus(playlistId: number, onFocus: () => void): () => void {
+  const take = (id: number) => {
+    if (id !== playlistId || pendingFocus !== id) return;
+    pendingFocus = null;
+    onFocus();
+  };
+  take(playlistId);
+  focusListeners.add(take);
+  return () => {
+    focusListeners.delete(take);
+  };
+}

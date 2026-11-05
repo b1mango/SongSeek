@@ -4,9 +4,11 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
 import tomllib
 import zipfile
@@ -15,7 +17,29 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / ".build-cache"
 VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
-MAC_SOURCE = "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2"
+MAC_VERSION = "9.0.2"
+MAC_SOURCE = f"https://ffmpeg.org/releases/ffmpeg-{MAC_VERSION}.tar.xz"
+MAC_SHA256 = "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"
+LAME_SOURCE = "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz"
+LAME_SHA256 = "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
+LAME_FLAGS = ["--disable-shared", "--enable-static", "--disable-frontend", "--disable-decoder",
+              "--disable-dependency-tracking", "CFLAGS=-Os -mmacosx-version-min=12.0"]
+MAC_FLAGS = [
+    "--disable-everything", "--disable-autodetect", "--disable-network", "--disable-doc",
+    "--disable-debug", "--disable-ffplay", "--disable-avdevice", "--disable-swscale",
+    "--enable-small", "--enable-static", "--disable-shared", "--enable-stripping",
+    "--cc=clang", "--arch=arm64", "--target-os=darwin",
+    "--extra-cflags=-mmacosx-version-min=12.0 -I../include",
+    "--extra-ldflags=-mmacosx-version-min=12.0 -L../lame-3.100/libmp3lame/.libs",
+    "--enable-libmp3lame",
+    "--enable-decoder=mp3float,aac,alac,flac,opus,vorbis,pcm_*",
+    "--enable-encoder=pcm_s16le,libmp3lame",
+    "--enable-demuxer=mp3,mov,flac,ogg,matroska,wav,aac,pcm_s16le",
+    "--enable-muxer=ipod,mp4,opus,ogg,null,mp3",
+    "--enable-parser=aac,flac,mpegaudio,opus,vorbis",
+    "--enable-bsf=aac_adtstoasc", "--enable-protocol=file,pipe",
+    "--enable-filter=aresample,anull",
+]
 WIN_SOURCE = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 
 
@@ -43,6 +67,53 @@ def archive(url, filename):
     return path, actual
 
 
+def source_archive(url, digest):
+    path = CACHE / url.rsplit("/", 1)[1]
+    download(url, path)
+    with path.open("rb") as stream:
+        if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
+            raise RuntimeError(f"SHA256 mismatch: {path.name}; remove the cached download and retry")
+    return path
+
+
+def build_mac_tools(directory):
+    recipe = {"version": MAC_VERSION, "sha256": MAC_SHA256, "configure": MAC_FLAGS,
+              "lame_sha256": LAME_SHA256, "lame_configure": LAME_FLAGS}
+    key = hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()[:16]
+    build = CACHE / f"ffmpeg-{MAC_VERSION}-arm64-{key}"
+    ready = build / "bin"
+    if not all((ready / tool).is_file() for tool in ("ffmpeg", "ffprobe")):
+        build.mkdir(exist_ok=True)
+        for url, digest in ((MAC_SOURCE, MAC_SHA256), (LAME_SOURCE, LAME_SHA256)):
+            with tarfile.open(source_archive(url, digest)) as bundle:
+                bundle.extractall(build, filter="data")
+        lame = build / "lame-3.100"
+        run("./configure", *LAME_FLAGS, cwd=lame)
+        run("make", "-j10", cwd=lame)
+        headers = build / "include" / "lame"
+        headers.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(lame / "include" / "lame.h", headers / "lame.h")
+        source = build / f"ffmpeg-{MAC_VERSION}"
+        run("./configure", *MAC_FLAGS, cwd=source)
+        run("make", "-j10", "ffmpeg", "ffprobe", cwd=source)
+        ready.mkdir(exist_ok=True)
+        for tool in ("ffmpeg", "ffprobe"):
+            run("strip", "-S", source / tool)
+            run("codesign", "--force", "-s", "-", source / tool)
+            run("codesign", "--verify", "--verbose", source / tool)
+        for tool in ("ffmpeg", "ffprobe"):
+            shutil.copy2(source / tool, ready / tool)
+    else:
+        print(f"Using cached minimal FFmpeg: {build.name}", flush=True)
+    for tool in ("ffmpeg", "ffprobe"):
+        shutil.copy2(ready / tool, directory / tool)
+        run("codesign", "--verify", "--verbose", directory / tool)
+    return [{"url": MAC_SOURCE, "sha256": MAC_SHA256, "cache_key": key,
+             "configure": shlex.join(["./configure", *MAC_FLAGS])},
+            {"url": LAME_SOURCE, "sha256": LAME_SHA256,
+             "configure": shlex.join(["./configure", *LAME_FLAGS])}]
+
+
 def prepare_tools():
     directory = CACHE / "bin"
     directory.mkdir(exist_ok=True)
@@ -50,15 +121,7 @@ def prepare_tools():
     if sys.platform == "darwin":
         if platform.machine() != "arm64":
             raise RuntimeError("macOS build requires Apple Silicon")
-        for tool in ("ffmpeg", "ffprobe"):
-            url = f"{MAC_SOURCE}/{tool}.zip"
-            path, digest = archive(url, f"mac-arm64-{tool}-9.0.2.zip")
-            with zipfile.ZipFile(path) as bundle:
-                entry = next(item for item in bundle.namelist() if Path(item).name == tool)
-                (directory / tool).write_bytes(bundle.read(entry))
-            (directory / tool).chmod(0o755)
-            run("codesign", "--verify", "--verbose", directory / tool)
-            records.append({"url": url, "sha256": digest})
+        records = build_mac_tools(directory)
     elif sys.platform == "win32":
         path, digest = archive(WIN_SOURCE, "windows-ffmpeg-essentials.zip")
         with zipfile.ZipFile(path) as bundle:
@@ -75,7 +138,7 @@ def prepare_tools():
         versions.append(result.stdout)
         if sys.platform == "darwin":
             linked = subprocess.check_output(["otool", "-L", str(executable)], text=True)
-            if any(line.strip().startswith(("/opt/", "/usr/local/", "@rpath", "@loader_path")) for line in linked.splitlines()[1:]):
+            if any(not line.strip().startswith(("/usr/lib/", "/System/Library/")) for line in linked.splitlines()[1:]):
                 raise RuntimeError("FFmpeg has non-system dynamic dependencies")
     notice = (ROOT / "packaging" / "THIRD_PARTY.md").read_text()
     notice += "\n## Build provenance\n\n```json\n" + json.dumps(records, indent=2) + "\n```\n\n```text\n" + "\n".join(versions) + "\n```\n"
@@ -123,7 +186,7 @@ def main():
         if not (stage / "Applications").is_symlink():
             (stage / "Applications").symlink_to("/Applications")
         artifact = ROOT / "dist" / f"觅音-{VERSION}-mac-arm64.dmg"
-        run("hdiutil", "create", "-volname", "觅音", "-srcfolder", stage, "-ov", "-format", "UDZO", artifact)
+        run("hdiutil", "create", "-volname", "觅音", "-srcfolder", stage, "-ov", "-format", "ULMO", artifact)
     else:
         artifact = Path(shutil.make_archive(str(ROOT / "dist" / f"SongSeek-{VERSION}-windows-x64"), "zip", ROOT / "dist", "SongSeek"))
     print(json.dumps({"artifact": str(artifact), "bytes": artifact.stat().st_size, "build_seconds": round(time.monotonic() - started, 1)}, ensure_ascii=False))

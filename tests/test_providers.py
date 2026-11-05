@@ -98,6 +98,23 @@ def test_mock_is_deterministic():
     assert mock.make_candidates("不存在 周杰伦") == []
 
 
+def test_mock_mp3_duration_bitrate_and_cache(config, monkeypatch):
+    from songseek.downloader import verify
+    provider = mock.MockProvider(config)
+    candidate = mock.make_candidates("晴天 周杰伦")[0]
+    candidate.duration = 1.25
+    candidate.bitrate = 128
+    source = provider.resolve(candidate)
+    from pathlib import Path
+    info = verify(Path(source.local_path), candidate.duration)
+    assert info["codec"] == "mp3" and info["bitrate"] == 128
+    assert abs(info["duration"] - 1.25) < .1
+    def unexpected(*args, **kwargs):
+        pytest.fail("cached mock audio must not be regenerated")
+    monkeypatch.setattr(mock.subprocess, "run", unexpected)
+    assert provider.resolve(candidate).local_path == source.local_path
+
+
 def test_http_proxy_and_concurrency(config, monkeypatch):
     config.settings.proxy_mode = "manual"
     config.settings.proxy = "http://127.0.0.1:7897"

@@ -518,6 +518,12 @@ def create_app(config: Config | None = None, service: Service | None = None, *,
             raise SongSeekError("请在桌面应用中选择文件夹", "not_desktop", 409)
         return {"path": desktop.pick_folder(body.initial)}
 
+    @app.post("/api/system/titlebar-double-click")
+    def titlebar_double_click():
+        if desktop is not None and desktop.window is not None:
+            desktop.titlebar_double_click()
+        return {"ok": True}
+
     @app.post("/api/system/open-url")
     def open_url(body: OpenURL):
         parsed = urlsplit(body.url)

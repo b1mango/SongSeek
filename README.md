@@ -58,6 +58,8 @@ uv run --extra desktop songseek app
 # Windows: uv run --extra desktop --group build python scripts/build_desktop.py
 ```
 
-构建脚本下载并校验 FFmpeg/FFprobe，将缓存放在 `.build-cache/`，从 `packaging/icon.svg` 生成图标，产物写入 `dist/`。macOS 包做 ad-hoc 签名，生成 `觅音-<版本>-mac-arm64.dmg`；Windows 生成便携 ZIP。CI 在 tag push 或手动触发时分别构建，不自动发布。第三方工具来源、许可证和构建哈希随应用附带在 `THIRD_PARTY.md`。
+macOS 构建从官方 FFmpeg 9.0.2 和 LAME 3.100 源码编译 LGPL 最小音频静态版，源码 SHA256 固定在脚本中，最低支持 macOS 12；禁用网络、视频和设备，保留解码校验、音频换容器及 mock MP3 生成。首次使用 `make -j10` 编译，后续按版本和配置命中 `.build-cache/` 缓存；不链接或打包 Homebrew FFmpeg。Windows 继续下载并校验 Gyan essentials GPL 版，来源不变。
+
+构建从 `packaging/icon.svg` 生成图标，产物写入 `dist/`。Pillow 仅用于构建图标，不随应用分发；歌单表格导入不需要图片处理。macOS 包做 ad-hoc 签名，生成 ULMO（LZMA，macOS 10.15+ 可打开）的 `觅音-<版本>-mac-arm64.dmg`；Windows 生成便携 ZIP。CI 在 tag push 或手动触发时分别构建，不自动发布。第三方工具来源、许可证、构建哈希和 configure 命令随应用附带在 `THIRD_PARTY.md`。
 
 无窗口验收：`dist/觅音.app/Contents/MacOS/SongSeek --selftest`。临时运行后端：`SONGSEEK_HOME=/tmp/songseek-desktop dist/觅音.app/Contents/MacOS/SongSeek --headless --port 8765`。

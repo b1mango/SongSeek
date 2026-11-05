@@ -2,8 +2,9 @@ import { useEffect } from "react";
 import { CloudOff, FileUp, ListMusic, Search, Settings2 } from "lucide-react";
 import { api } from "./api";
 import { ToastProvider, useToast } from "./components";
+import { TitleBar } from "./desktop";
 import { PlayerProvider } from "./player";
-import { href, useRoute, type Route } from "./router";
+import { href, navigate, requestJobFocus, useRoute, type Route } from "./router";
 import { refreshPlaylists, upsertJob, useLiveConnection, useStore } from "./store";
 import { HomePage } from "./pages/Home";
 import { ImportPage } from "./pages/Import";
@@ -33,6 +34,7 @@ function Shell() {
 
   return (
     <div className="shell">
+      <TitleBar />
       <Sidebar route={route} />
       <main className="main">
         <div className="page-enter" key={route.page === "playlist" || route.page === "review" ? `${route.page}:${route.id}` : route.page}>
@@ -77,7 +79,7 @@ function Sidebar({ route }: { route: Route }) {
   return (
     <aside className="sidebar">
       <a className="brand" href="#/">
-        <span className="brand-disc" aria-hidden />
+        <img className="brand-mark" src="./logo.svg" alt="" aria-hidden draggable={false} />
         <span className="brand-name">觅音</span>
         <span className="brand-en">SongSeek</span>
       </a>
@@ -130,8 +132,26 @@ function Sidebar({ route }: { route: Route }) {
 function JobChip({ job }: { job: Job }) {
   const toast = useToast();
   const pct = job.total ? Math.round((job.completed / job.total) * 100) : 0;
+  const open = () => {
+    // jobs without a playlist come from 单曲搜索
+    if (job.playlist_id == null) return navigate({ page: "search" });
+    requestJobFocus(job.playlist_id);
+    navigate({ page: "playlist", id: job.playlist_id });
+  };
   return (
-    <div className="job-chip">
+    <div
+      className="job-chip"
+      role="button"
+      tabIndex={0}
+      title="查看进度"
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          open();
+        }
+      }}
+    >
       <div className="job-chip-head">
         <span>{job.kind === "search" ? "搜索中" : job.kind === "lyrics" ? "补歌词" : "下载中"}</span>
         <span className="mono">
@@ -139,12 +159,14 @@ function JobChip({ job }: { job: Job }) {
         </span>
         <button
           className="link-btn"
-          onClick={() =>
+          onClick={(e) => {
+            e.stopPropagation();
             api
               .cancelJob(job.id)
               .then(upsertJob)
-              .catch((e) => toast("bad", e.message))
-          }
+              .catch((err) => toast("bad", err.message));
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
         >
           停止
         </button>

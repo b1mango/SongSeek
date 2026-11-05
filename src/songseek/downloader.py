@@ -64,7 +64,7 @@ def verify(path: Path, expected: float | None = None) -> dict:
     if expected is not None and abs(duration - expected) > tolerance(expected):
         raise SongSeekError(f"实际时长 {duration:.1f}s 与目标 {expected:.1f}s 不符，已拦截", "duration_mismatch")
     try:
-        decoded = subprocess.run([require_tool("ffmpeg"), "-v", "error", "-xerror", "-i", str(path), "-f", "null", "-"], capture_output=True, text=True, timeout=max(90, duration * 2))
+        decoded = subprocess.run([require_tool("ffmpeg"), "-v", "error", "-xerror", "-i", str(path), "-map", "0:a", "-f", "null", "-"], capture_output=True, text=True, timeout=max(90, duration * 2))
     except FileNotFoundError:
         raise SongSeekError("未安装系统 ffmpeg", "missing_tool") from None
     except subprocess.TimeoutExpired:

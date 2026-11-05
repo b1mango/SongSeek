@@ -100,7 +100,7 @@ export function NowPlaying({
         <span className="np-bg-shade" />
       </div>
 
-      <header className="np-top">
+      <header className="np-top pywebview-drag-region">
         <button className="np-icon" onClick={close} aria-label="收起播放页" title="收起（Esc）">
           <ChevronDown size={22} />
         </button>

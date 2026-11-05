@@ -230,13 +230,12 @@ kbd {
   padding: 4px 10px 2px;
   text-decoration: none;
 }
-.brand-disc {
+.brand-mark {
   align-self: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: radial-gradient(circle, var(--paper) 0 1.5px, var(--label) 2px 5.5px, var(--ink) 6px);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  width: 30px;
+  height: 30px;
+  margin: -4px -2px -4px -6px;
+  filter: drop-shadow(0 1px 1px rgba(29, 26, 22, 0.08));
 }
 .brand-name {
   font: 600 20px/1 var(--font-display);
@@ -368,6 +367,18 @@ kbd {
   background: var(--sleeve);
   box-shadow: var(--shadow);
   font-size: 12px;
+  cursor: pointer;
+  transition: box-shadow .15s ease, transform .15s ease;
+}
+.job-chip:hover {
+  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--ok) 40%, transparent);
+}
+.job-chip:active {
+  transform: translateY(1px);
+}
+.job-chip:focus-visible {
+  outline: 2px solid var(--ok);
+  outline-offset: 2px;
 }
 .job-chip-head {
   display: flex;
@@ -2478,11 +2489,11 @@ html.lyrics-open .page {
 }
 .lrc-toggle.is-on {
   color: var(--label-ink);
-  background: var(--label);
-  border-color: var(--label);
+  background: var(--ok);
+  border-color: var(--ok);
   box-shadow:
-    0 0 0 3px var(--label-soft),
-    0 4px 14px -4px color-mix(in srgb, var(--label) 70%, transparent);
+    0 0 0 3px var(--ok-soft),
+    0 4px 14px -4px color-mix(in srgb, var(--ok) 70%, transparent);
 }
 .lrc-toggle.is-on .lrc-toggle-dot {
   background: var(--label-ink);
@@ -2500,14 +2511,14 @@ html.lyrics-open .page {
 }
 /* in table rows the lit state is a soft tint, so a column of them doesn't shout */
 .lrc-toggle.is-compact.is-on {
-  color: var(--label);
-  background: var(--label-soft);
-  border-color: color-mix(in srgb, var(--label) 45%, transparent);
+  color: var(--ok);
+  background: var(--ok-soft);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
   box-shadow: none;
 }
 .lrc-toggle.is-compact.is-on .lrc-toggle-dot {
-  background: var(--label);
-  box-shadow: 0 0 6px 1px color-mix(in srgb, var(--label) 65%, transparent);
+  background: var(--ok);
+  box-shadow: 0 0 6px 1px color-mix(in srgb, var(--ok) 65%, transparent);
 }
 .lrc-toggle.is-compact:not(.is-on) {
   border-style: dashed;
@@ -3489,4 +3500,36 @@ html.is-desktop th {
 html.is-desktop a,
 html.is-desktop img {
   -webkit-user-drag: none;
+}
+
+/* macOS app window: no separate title bar. The page runs to the top edge, the traffic lights
+   float over the sidebar, and a thin strip above the content drags the window. */
+.titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 30px;
+  z-index: 55;
+}
+html.is-mac-app .sidebar {
+  padding-top: 46px;
+}
+html.is-mac-app .main {
+  border-top: 30px solid transparent;
+}
+html.is-mac-app .toasts {
+  top: 40px;
+}
+html.is-mac-app .np-top {
+  padding-top: 38px;
+}
+
+/* ---------- jump from the sidebar job card: briefly light up the active track ---------- */
+tr.is-flash > td {
+  animation: row-flash 1.8s ease-out;
+}
+@keyframes row-flash {
+  0%, 30% { background: color-mix(in srgb, var(--ok) 22%, transparent); }
+  100% { background: transparent; }
 }

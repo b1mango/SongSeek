@@ -178,5 +178,6 @@ export const api = {
   testProxy: (mode?: ProxyMode, proxy?: string) => request<ProxyTest>("/proxy/test", json("POST", { mode, proxy })),
   system: () => request<SystemInfo>("/system"),
   pickFolder: (initial?: string) => request<{ path: string | null }>("/system/pick-folder", json("POST", { initial })),
+  titlebarDoubleClick: () => request<{ ok: boolean }>("/system/titlebar-double-click", json("POST", {})),
   openUrl: (url: string) => request<{ ok: boolean }>("/system/open-url", json("POST", { url })),
 };

@@ -87,6 +87,18 @@ def test_full_decode_and_id3(tone, service):
     assert str(tags["TXXX:SOURCE"]).startswith("provider=mock; id=")
 
 
+def test_full_decode_only_maps_audio(tone, monkeypatch):
+    run = subprocess.run
+    commands = []
+    def capture(command, **kwargs):
+        commands.append(command)
+        return run(command, **kwargs)
+    monkeypatch.setattr(subprocess, "run", capture)
+    verify(tone)
+    decode = commands[-1]
+    assert decode[decode.index("-map") + 1] == "0:a"
+
+
 @pytest.mark.parametrize("mask, mode", [(0o022, 0o644), (0o002, 0o644), (0o027, 0o640), (0o077, 0o600)])
 def test_download_actual_quality_and_file_permissions(tone, service, monkeypatch, mask, mode):
     import os

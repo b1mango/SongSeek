@@ -1,4 +1,6 @@
 import hashlib
+import math
+import struct
 import subprocess
 import threading
 
@@ -45,8 +47,11 @@ class MockProvider(BaseProvider):
             if not path.exists():
                 partial = path.with_suffix(".part.mp3")
                 try:
-                    subprocess.run([require_tool("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
-                                    "-t", str(candidate.duration), "-c:a", "libmp3lame", "-b:a", f"{candidate.bitrate}k", "-y", str(partial)], check=True, capture_output=True, timeout=60)
+                    # PCM 输入让桌面版不必携带 lavfi/avdevice。
+                    second = b"".join(struct.pack("<h", round(4095 * math.sin(2 * math.pi * 440 * i / 44100))) for i in range(44100))
+                    subprocess.run([require_tool("ffmpeg"), "-v", "error", "-f", "s16le", "-ar", "44100", "-ac", "1", "-i", "pipe:0",
+                                    "-t", str(candidate.duration), "-c:a", "libmp3lame", "-b:a", f"{candidate.bitrate}k", "-y", str(partial)],
+                                   input=second * math.ceil(candidate.duration), check=True, capture_output=True, timeout=60)
                     partial.replace(path)
                 finally:
                     partial.unlink(missing_ok=True)
