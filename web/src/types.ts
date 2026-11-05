@@ -1,16 +1,7 @@
 // Mirrors docs/API.md. Change the contract there first.
 
 export type TrackStatus =
-  | "pending"
-  | "searching"
-  | "matched"
-  | "needs_review"
-  | "not_found"
-  | "queued"
-  | "downloading"
-  | "done"
-  | "failed"
-  | "skipped";
+  "pending" | "searching" | "matched" | "needs_review" | "not_found" | "queued" | "downloading" | "done" | "failed" | "skipped";
 
 export type VersionFlag = "live" | "dj" | "remix" | "instrumental" | "cover" | "speed" | "clip";
 
@@ -46,6 +37,17 @@ export interface LyricsInfo {
   error: string | null;
 }
 
+export interface ChosenCandidate {
+  id: number;
+  provider_label: string;
+  title: string;
+  artist: string;
+  album: string;
+  duration: number | null;
+  quality: string;
+  score: number;
+}
+
 export interface Track {
   id: number;
   playlist_id: number;
@@ -58,6 +60,8 @@ export interface Track {
   status: TrackStatus;
   chosen_candidate_id: number | null;
   chosen_by: "auto" | "user" | null;
+  /** Snapshot of the chosen candidate (source, quality, score) so the list can show what will be downloaded. */
+  chosen?: ChosenCandidate | null;
   /** Save lyrics with this track's download; null follows the global setting. */
   lyrics_wanted?: boolean | null;
   best_score: number | null;
@@ -148,8 +152,11 @@ export interface Settings {
   lyrics: boolean;
   lyrics_embed: boolean;
   lyrics_translation: boolean;
+  theme?: ThemePref;
   netease_cookie_set: boolean;
 }
+
+export type ThemePref = "system" | "light" | "dark";
 
 export interface ParsedRow {
   title: string;

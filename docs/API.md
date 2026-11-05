@@ -59,6 +59,10 @@ interface Track {
   status: TrackStatus;
   chosen_candidate_id: number | null;
   chosen_by: "auto" | "user" | null;
+  chosen: {                      // 选定候选的快照，随 chosen_candidate_id 自动刷新；未选定时为 null
+    id: number; provider_label: string; title: string; artist: string; album: string;
+    duration: number | null; quality: string; score: number;
+  } | null;
   best_score: number | null;     // 最佳候选得分，0~100
   candidate_count: number;
   file: DownloadedFile | null;
@@ -158,7 +162,7 @@ interface ParseResult {
 | DELETE | `/api/playlists/{id}` | 删除清单记录，不删除已下载的文件 |
 | GET | `/api/playlists/{id}/export.csv` | 导出结果 CSV，列为：序号、歌名、歌手、状态、来源、音质、时长、文件路径、备注 |
 | PATCH | `/api/tracks/{id}` | `{title?, artist?, album?, duration?, note?, lyrics_wanted?}`，返回 `Track` |
-| DELETE | `/api/tracks/{id}` | 从清单中删除该曲目 |
+| DELETE | `/api/tracks/{id}` | 从清单中删除该曲目及其候选，不删除已下载的文件；搜索或下载中返回 409 `track_busy` |
 | GET | `/api/tracks/{id}/candidates` | `Candidate[]`，按 rank 排序，包含 reject |
 | POST | `/api/tracks/{id}/choose` | `{candidate_id}`，选定候选，status 改为 matched、chosen_by 改为 user，返回 `Track` |
 | POST | `/api/tracks/{id}/search` | `{query?, providers?: string[]}`，同步重新搜索；新候选追加并重新排序，返回 `{track, candidates}`。超时上限 30s |
@@ -254,6 +258,8 @@ Token 不透明，候选保存在进程内 LRU（4096 条，2 小时 TTL），�
 下载和清单批量补歌词遵守 Track.lyrics_wanted：true 强制获取，false 跳过，null 跟随全局。修改此字段不清空候选、不重置状态。CSV 列不变。
 
 设置项：`lyrics`（默认开，下载时保存 .lrc）、`lyrics_translation`（附译文，同时间戳第二行）、`lyrics_embed`（写入音频标签）。
+
+外观：`theme` 为 `system`（默认，跟随系统）/ `light` / `dark`。服务端返回 `index.html` 时写入 `<html data-theme-pref>`，页面首帧前据此确定主题；桌面端修改后同步窗口外观。
 
 ### 实时事件（SSE）
 `GET /api/events` 返回 `text/event-stream`，每 15 秒发一次注释行 `: ping`。事件类型如下：

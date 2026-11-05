@@ -20,14 +20,14 @@ export function RowFlow({ trackId }: { trackId: number }) {
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let w = 0;
     let h = 0;
-    let dot = "#2d5f9a";
-    let wash = "#dfe8f3";
-    let clear = "rgba(223, 232, 243, 0)";
+    let dot = "#7b4fd8";
+    let wash = "#ebe2fb";
+    let clear = "rgba(235, 226, 251, 0)";
 
     const readColors = () => {
       const css = getComputedStyle(canvas);
-      dot = css.getPropertyValue("--info").trim() || dot;
-      wash = css.getPropertyValue("--info-soft").trim() || wash;
+      dot = css.getPropertyValue("--flow").trim() || dot;
+      wash = css.getPropertyValue("--flow-soft").trim() || wash;
       ctx.fillStyle = wash;
       const hex = String(ctx.fillStyle); // canvas normalises any CSS colour to #rrggbb
       clear = `rgba(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)}, 0)`;
@@ -137,12 +137,11 @@ export function RowFlow({ trackId }: { trackId: number }) {
     ro.observe(row);
     const io = new IntersectionObserver(([e]) => (visible = e.isIntersecting));
     io.observe(row);
-    const scheme = window.matchMedia("(prefers-color-scheme: dark)");
     const recolor = () => {
       readColors();
       if (still) paint();
     };
-    scheme.addEventListener("change", recolor);
+    window.addEventListener("themechange", recolor);
     const redraw = () => {
       shown = target(goal.current) ?? 0;
       paint();
@@ -153,7 +152,7 @@ export function RowFlow({ trackId }: { trackId: number }) {
       cancelAnimationFrame(frame);
       ro.disconnect();
       io.disconnect();
-      scheme.removeEventListener("change", recolor);
+      window.removeEventListener("themechange", recolor);
       canvas.removeEventListener("redraw", redraw);
     };
   }, []);

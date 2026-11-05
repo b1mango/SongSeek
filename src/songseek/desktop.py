@@ -12,11 +12,6 @@ import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-import httpx
-import uvicorn
-
-from .config import Config
-from .tools import require_tool, yt_dlp_command
 
 
 def data_dir() -> Path:
@@ -88,6 +83,39 @@ class DesktopBridge:
         elif action != "None":
             AppHelper.callAfter(native.zoom_, None)
 
+    def apply_theme(self, theme: str):
+        """Keep the native window (traffic lights, under-page colour, dialogs) in step with the page's theme."""
+        if sys.platform != "darwin" or self.window is None or self.window.native is None:
+            return
+        from PyObjCTools import AppHelper
+        AppHelper.callAfter(set_native_theme, self.window.native, theme)
+
+
+THEMES = ("system", "light", "dark")
+PAPER = {"light": "#f5f1e8", "dark": "#14120f"}
+
+
+def stored_theme(home: Path) -> str:
+    """The theme saved in settings.json, read without loading the backend (it is needed before the window exists)."""
+    try:
+        theme = json.loads((home / "settings.json").read_text("utf-8")).get("settings", {}).get("theme", "system")
+    except (OSError, ValueError, AttributeError):
+        return "system"
+    return theme if theme in THEMES else "system"
+
+
+def resolved_theme(theme: str) -> str:
+    return theme if theme != "system" else "dark" if system_dark() else "light"
+
+
+def set_native_theme(native, theme: str):
+    import AppKit
+    names = {"light": AppKit.NSAppearanceNameAqua, "dark": AppKit.NSAppearanceNameDarkAqua}
+    native.setAppearance_(AppKit.NSAppearance.appearanceNamed_(names[theme]) if theme in names else None)
+    colour = PAPER[resolved_theme(theme)]
+    r, g, b = (int(colour[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    native.setBackgroundColor_(AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(r, g, b, 1.0))
+
 
 def unify_titlebar(window):
     """macOS: run the page under a transparent title bar so the window reads as one surface."""
@@ -104,34 +132,67 @@ def unify_titlebar(window):
     native.setTitleVisibility_(AppKit.NSWindowTitleHidden)
 
 
-def bring_to_front(window):
-    """macOS: claim focus once the page is up.
+def keep_focus(window):
+    """macOS: make sure a freshly launched window can actually be clicked.
 
-    If launch-time activation times out (main thread busy starting WebKit), the window is shown
-    but the app never becomes active, and clicks into the page are swallowed. Activate explicitly.
+    When the launch-time activation times out ("AppleEvent activation suspension timed out" in the
+    system log) the window is drawn but the app never becomes active, and the page swallows clicks.
+    main() avoids the cause by entering the run loop before any slow work; this is the safety net:
+    for the first few seconds, until the app has been active once, keep asking for activation and
+    make the window key with the web view as first responder. Once the user has had the app in front,
+    leave focus alone, so switching away right after launch is respected.
     """
     if sys.platform != "darwin" or window.native is None:
         return
     import AppKit
+    import WebKit
     from PyObjCTools import AppHelper
+    app = AppKit.NSApplication.sharedApplication()
+    native = window.native
+    log = logging.getLogger("songseek.desktop")
 
-    def activate():
-        app = AppKit.NSApplication.sharedApplication()
+    def check(attempt: int):
+        if app.isActive():
+            if not native.isKeyWindow():
+                native.makeKeyAndOrderFront_(None)
+            web = native.contentView()  # pywebview swaps the WKWebView in once the first page has loaded
+            if web is not None and web.isKindOfClass_(WebKit.WKWebView) and native.firstResponder() is not web:
+                native.makeFirstResponder_(web)
+            if attempt:
+                log.info("launch focus recovered after %d checks", attempt)
+            return
+        if attempt == 0 or attempt % 3 == 0:
+            log.info("launch focus: app not active yet (check %d), re-activating", attempt)
+        AppKit.NSRunningApplication.currentApplication().activateWithOptions_(AppKit.NSApplicationActivateAllWindows)
         if app.respondsToSelector_("activate"):
             app.activate()
-        else:
-            app.activateIgnoringOtherApps_(True)
-        window.native.makeKeyAndOrderFront_(None)
+        app.activateIgnoringOtherApps_(True)
+        native.makeKeyAndOrderFront_(None)
+        if attempt < 24:  # ~6 s
+            AppHelper.callLater(0.25, check, attempt + 1)
 
-    AppHelper.callAfter(activate)
+    AppHelper.callAfter(check, 0)
 
 
-def quit_on_close(server):
+def boot_page(theme: str) -> str:
+    """What the window shows for the moment the local service takes to start: the page's own paper colour."""
+    paper = PAPER[resolved_theme(theme)]
+    ink = "#8b8273" if paper == PAPER["dark"] else "#8a8174"
+    return (f'<!doctype html><html><head><meta charset="utf-8"><style>html,body{{margin:0;height:100%;background:{paper};'
+            f'color:{ink};font:13px -apple-system,"PingFang SC",sans-serif;-webkit-user-select:none;cursor:default}}'
+            'body{display:grid;place-items:center}p{opacity:0;animation:in .3s ease 1.2s forwards}'
+            '@keyframes in{to{opacity:1}}</style></head><body class="pywebview-drag-region"><p id="m">正在启动…</p></body></html>')
+
+
+def quit_on_close(server: dict):
     """Close button: take the window off screen and exit in the same tick, before AppKit tears the page down."""
     def closing(window):
         if sys.platform == "darwin" and window.native is not None:
             window.native.orderOut_(None)
-        server.quit_now()
+        if server.get("server") is not None:
+            server["server"].quit_now()
+        logging.shutdown()
+        os._exit(0)
     return closing
 
 
@@ -177,6 +238,8 @@ def already_running():
 
 class LocalServer:
     def __init__(self, home: Path, bridge: DesktopBridge | None = None, port: int = 0):
+        import uvicorn
+        from .config import Config
         from .server import create_app
         self.socket = socket.socket()
         self.socket.bind(("127.0.0.1", port))
@@ -189,6 +252,7 @@ class LocalServer:
         self.thread = threading.Thread(target=self.server.run, kwargs={"sockets": [self.socket]}, name="songseek-server")
 
     def start(self):
+        import httpx
         self.thread.start()
         deadline = time.monotonic() + 20
         with httpx.Client(trust_env=False, timeout=.5) as client:
@@ -226,6 +290,8 @@ class LocalServer:
 
 
 def selftest() -> int:
+    import httpx
+    from .tools import require_tool, yt_dlp_command
     with tempfile.TemporaryDirectory(prefix="songseek-selftest-") as directory:
         server = LocalServer(Path(directory), DesktopBridge())
         server.start()
@@ -272,34 +338,64 @@ def main():
     try:
         configure_logging(home)
         bridge = DesktopBridge()
+        if not args.headless:
+            run_window(home, bridge, args.port)
+            return
         server = LocalServer(home, bridge, args.port)
         server.start()
         try:
-            if args.headless:
-                print(server.url, flush=True)
-                stopping = threading.Event()
-                signal.signal(signal.SIGTERM, lambda *_: stopping.set())
-                signal.signal(signal.SIGINT, lambda *_: stopping.set())
-                while server.thread.is_alive() and not stopping.wait(.2):
-                    pass
-            else:
-                import webview
-                # Only the page's own drag strips move the window, not the buttons inside them.
-                webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
-                bridge.window = webview.create_window("觅音", server.url, width=1280, height=840,
-                                                      min_size=(980, 640), background_color="#14120f" if system_dark() else "#f5f1e8")
-                bridge.window.events.before_show += unify_titlebar
-                bridge.window.events.closing += quit_on_close(server)
-                bridge.window.events.shown += bring_to_front
-                bridge.window.events.loaded += bring_to_front
-                webview.start(gui="cocoa" if sys.platform == "darwin" else "edgechromium" if sys.platform == "win32" else None)
-                lock.close()
-                server.quit_now()
+            print(server.url, flush=True)
+            stopping = threading.Event()
+            signal.signal(signal.SIGTERM, lambda *_: stopping.set())
+            signal.signal(signal.SIGINT, lambda *_: stopping.set())
+            while server.thread.is_alive() and not stopping.wait(.2):
+                pass
         finally:
             server.stop()
     finally:
         lock.close()
 
+
+def run_window(home: Path, bridge: DesktopBridge, port: int):
+    """Window first, backend second.
+
+    macOS hands a launching app its activation only if the main thread reaches the AppKit run loop in
+    time. Importing the backend and waiting for the local service used to happen before that, and on a
+    cold first launch (fresh copy, Gatekeeper check, cold disk cache) it took long enough for the
+    activation to time out: the window appeared but could not be clicked. So the window opens at once
+    on a placeholder in the page's colour, and the service starts on a worker thread, then loads in.
+    """
+    import webview
+    log = logging.getLogger("songseek.desktop")
+    began = time.monotonic()
+    theme = stored_theme(home)
+    held: dict = {}
+    # Only the page's own drag strips move the window, not the buttons inside them.
+    webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
+    window = bridge.window = webview.create_window("觅音", html=boot_page(theme), width=1280, height=840, min_size=(980, 640),
+                                                   background_color=PAPER[resolved_theme(theme)])
+    window.events.before_show += unify_titlebar
+    if sys.platform == "darwin":
+        window.events.before_show += lambda window: set_native_theme(window.native, theme)
+    window.events.closing += quit_on_close(held)
+    window.events.shown += keep_focus
+    window.events.shown += lambda: log.info("window shown %.2fs after start", time.monotonic() - began)
+
+    def boot():
+        try:
+            server = LocalServer(home, bridge, port)
+            server.start()
+        except Exception as error:
+            log.exception("local service failed to start")
+            window.evaluate_js(f"document.getElementById('m').textContent = {json.dumps('本地服务启动失败：' + str(error))}")
+            return
+        held["server"] = server
+        log.info("local service ready %.2fs after start", time.monotonic() - began)
+        window.load_url(server.url)
+
+    webview.start(boot, gui="cocoa" if sys.platform == "darwin" else "edgechromium" if sys.platform == "win32" else None)
+    if "server" in held:
+        held["server"].quit_now()
 
 if __name__ == "__main__":
     main()

@@ -6,6 +6,14 @@
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="./logo.svg" />
     <title>觅音 SongSeek</title>
+    <script>
+      // Resolve the theme before first paint: the server writes the saved choice into data-theme-pref.
+      (function () {
+        var r = document.documentElement;
+        var pref = r.dataset.themePref || "system";
+        r.dataset.theme = pref === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : pref;
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

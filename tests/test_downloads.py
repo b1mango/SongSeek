@@ -355,3 +355,15 @@ def test_preview_cache_does_not_emit_progress(service, tone, monkeypatch):
     assert path.read_bytes() == content
     assert callbacks == [None]
     assert listener.empty()
+
+
+def test_track_carries_snapshot_of_chosen_candidate(service):
+    track, candidates = searched(service)
+    pick = candidates[-1]
+    chosen = service.choose(track.id, pick.id)
+    assert chosen.chosen_by == "user"
+    assert chosen.chosen is not None
+    assert (chosen.chosen.id, chosen.chosen.provider_label, chosen.chosen.quality, chosen.chosen.score) == (pick.id, pick.provider_label, pick.quality.label, pick.score)
+    assert service.track(track.id).chosen == chosen.chosen
+    service.delete_track(track.id)
+    assert service.db.list("candidates", "track_id", track.id) == []

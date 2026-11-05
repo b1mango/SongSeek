@@ -19,7 +19,7 @@ from .events import Broadcaster
 from .importers import parse_file, parse_text
 from .matching import evaluate, evaluate_candidates, same_recording, sort_candidates
 from .lyrics import LyricsManager, has_lyrics_file
-from .models import Candidate, Health, Job, ParsedRow, Playlist, RawCandidate, STATUSES, Track, now
+from .models import Candidate, ChosenCandidate, Health, Job, ParsedRow, Playlist, RawCandidate, STATUSES, Track, now
 from .normalize import title_key, version_flags
 from .providers import create_providers
 from .query import TRUSTED, detect_artist, parse_query
@@ -61,10 +61,12 @@ class Service:
     def _recover(self):
         for data in self.db.list("tracks"):
             track = Track(**data)
-            if track.status in BUSY:
+            interrupted = track.status in BUSY
+            if interrupted:
                 track.status = "matched" if track.chosen_candidate_id else "needs_review" if track.candidate_count else "pending"
                 track.error = "上次运行中断，可重新执行"
                 track.updated_at = now()
+            if self._sync_chosen(track) or interrupted:  # also backfills tracks saved before `chosen` existed
                 self.db.save("tracks", track.model_dump())
         for data in self.db.list("jobs"):
             if data["status"] == "running":
@@ -102,7 +104,21 @@ class Service:
     def _playlist_event(self, identifier: int):
         self.events.emit("playlist", self.playlist(identifier).model_dump())
 
+    def _sync_chosen(self, track: Track) -> bool:
+        """Refresh the snapshot of the chosen candidate shown in lists; True when it changed."""
+        before = track.chosen
+        track.chosen = None
+        if track.chosen_candidate_id is not None:
+            try:
+                c = self.candidate(track.chosen_candidate_id)
+                track.chosen = ChosenCandidate(id=c.id, provider_label=c.provider_label, title=c.title, artist=c.artist, album=c.album,
+                                               duration=c.duration, quality=c.quality.label, score=c.score)
+            except SongSeekError:
+                pass
+        return track.chosen != before
+
     def save_track(self, track: Track) -> Track:
+        self._sync_chosen(track)
         track.updated_at = now()
         self.db.save("tracks", track.model_dump())
         self.events.emit("track", track.model_dump())
@@ -143,7 +159,7 @@ class Service:
         with self.lock(identifier):
             track = self.track(identifier)
             self.ensure_idle(track)
-            self.db.delete("tracks", identifier)
+            self.db.delete("tracks", identifier)  # candidates go with it (ON DELETE CASCADE)
             self._playlist_event(track.playlist_id)
 
     def ensure_idle(self, track: Track):

@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from songseek import netproxy, tools
 from songseek.config import Config
-from songseek.desktop import InstanceLock, data_dir
+from songseek.desktop import InstanceLock, data_dir, stored_theme
 from songseek.models import Settings
 from songseek.server import create_app
 
@@ -131,6 +131,27 @@ def test_system_and_hosts(config, monkeypatch):
         assert client.post("/api/system/pick-folder", json={"initial": "/tmp/music"}).json() == {"path": "/tmp/music"}
         assert client.post("/api/system/pick-folder").json() == {"path": None}
         assert client.put("/api/settings", json={"proxy_mode": "off"}).json()["proxy_mode"] == "off"
+
+
+def test_theme_setting_reaches_window_and_page(config, monkeypatch, tmp_path):
+    applied = []
+    bridge = SimpleNamespace(window=object(), apply_theme=applied.append)
+    dist = tmp_path / "web" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text('<!doctype html><html lang="zh-CN"><head></head></html>', "utf-8")
+    monkeypatch.setattr("songseek.server.resource_dir", lambda: tmp_path)
+    with TestClient(create_app(config, desktop=bridge)) as client:
+        assert client.get("/api/settings").json()["theme"] == "system"
+        assert 'data-theme-pref="system"' in client.get("/").text
+        assert client.put("/api/settings", json={"theme": "dark"}).json()["theme"] == "dark"
+        assert applied == ["dark"]
+        assert '<html data-theme-pref="dark" lang="zh-CN">' in client.get("/playlist/1").text
+        assert client.put("/api/settings", json={"theme": "purple"}).status_code == 422
+        client.put("/api/settings", json={"proxy_mode": "off"})
+        assert applied == ["dark"]
+    assert stored_theme(config.home) == "dark"
+    (config.home / "settings.json").write_text("{broken", "utf-8")
+    assert stored_theme(config.home) == "system"
 
 
 def test_tool_resolution_and_commands(tmp_path, monkeypatch):

@@ -15,7 +15,7 @@ import anyio
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import Field, SecretStr
 from starlette.background import BackgroundTask
 from starlette.concurrency import iterate_in_threadpool
@@ -104,6 +104,7 @@ class SettingsUpdate(Model):
     lyrics: bool | None = None
     lyrics_translation: bool | None = None
     lyrics_embed: bool | None = None
+    theme: Literal["system", "light", "dark"] | None = None
     netease_cookie_set: bool | None = None
     netease_cookie: SecretStr | None = None
 
@@ -488,7 +489,10 @@ def create_app(config: Config | None = None, service: Service | None = None, *,
             raise SongSeekError("设置字段不能为空值", "invalid_settings")
         if body.netease_cookie is not None:
             values["netease_cookie"] = body.netease_cookie.get_secret_value()
-        return current().config.update(values)
+        updated = current().config.update(values)
+        if "theme" in values and desktop is not None:
+            desktop.apply_theme(updated.theme)
+        return updated
 
     @app.get("/api/health")
     def health():
@@ -543,6 +547,9 @@ def create_app(config: Config | None = None, service: Service | None = None, *,
         candidate = (dist / path).resolve()
         if candidate.is_relative_to(dist.resolve()) and candidate.is_file():
             return FileResponse(candidate)
-        return FileResponse(dist / "index.html")
+        # The saved theme goes straight into the page, so it never paints in the wrong colours first.
+        page = (dist / "index.html").read_text("utf-8")
+        page = page.replace("<html ", f'<html data-theme-pref="{current().config.settings.theme}" ', 1)
+        return HTMLResponse(page, headers={"Cache-Control": "no-cache"})
 
     return app

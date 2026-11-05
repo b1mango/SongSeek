@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { CloudOff, FileUp, ListMusic, Search, Settings2 } from "lucide-react";
+import { CloudOff, FileUp, ListMusic, Moon, Search, Settings2, Sun, SunMoon } from "lucide-react";
 import { api } from "./api";
 import { ToastProvider, useToast } from "./components";
 import { TitleBar } from "./desktop";
@@ -12,7 +12,8 @@ import { PlaylistPage } from "./pages/Playlist";
 import { ReviewPage } from "./pages/Review";
 import { SearchPage } from "./pages/Search";
 import { SettingsPage } from "./pages/Settings";
-import type { Job } from "./types";
+import { setThemePref, useThemePref } from "./theme";
+import type { Job, ThemePref } from "./types";
 
 export function App() {
   return (
@@ -102,7 +103,11 @@ function Sidebar({ route }: { route: Route }) {
               <li key={p.id}>
                 <a className={`side-list${activeId === p.id ? " is-active" : ""}`} href={href({ page: "playlist", id: p.id })}>
                   <span className="side-list-name">{p.name}</span>
-                  {review > 0 && <span className="side-pill tone-warn" title={`${review} 首待审核`}>{review}</span>}
+                  {review > 0 && (
+                    <span className="side-pill tone-warn" title={`${review} 首待审核`}>
+                      {review}
+                    </span>
+                  )}
                   <span className="side-list-meta mono">
                     {done}/{p.counts.total}
                   </span>
@@ -123,9 +128,37 @@ function Sidebar({ route }: { route: Route }) {
             <CloudOff size={14} aria-hidden /> 未连接本地服务
           </div>
         )}
-        {nav({ page: "settings" }, "音源与设置", Settings2, route.page === "settings")}
+        <div className="side-foot-row">
+          {nav({ page: "settings" }, "音源与设置", Settings2, route.page === "settings")}
+          <ThemeToggle />
+        </div>
       </div>
     </aside>
+  );
+}
+
+const THEMES: { pref: ThemePref; label: string; Icon: typeof Search }[] = [
+  { pref: "system", label: "跟随系统", Icon: SunMoon },
+  { pref: "light", label: "浅色", Icon: Sun },
+  { pref: "dark", label: "深色", Icon: Moon },
+];
+
+/** Cycles 跟随系统 → 浅色 → 深色; the icon shows the current choice. */
+function ThemeToggle() {
+  const toast = useToast();
+  const pref = useThemePref();
+  const i = THEMES.findIndex((t) => t.pref === pref);
+  const { label, Icon } = THEMES[i];
+  const next = THEMES[(i + 1) % THEMES.length];
+  return (
+    <button
+      className="icon-btn ghost theme-toggle"
+      aria-label={`外观：${label}`}
+      title={`外观：${label}（点击切换为${next.label}）`}
+      onClick={() => setThemePref(next.pref).catch((e) => toast("bad", (e as Error).message))}
+    >
+      <Icon size={16} />
+    </button>
   );
 }
 

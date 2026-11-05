@@ -131,6 +131,22 @@ export function PlaylistPage({ id }: { id: number }) {
       return updated;
     });
 
+  // Deleting is per track on the server; busy tracks (searching / downloading) refuse and are reported.
+  const removeTracks = (ids: number[]) => {
+    const names = ids.map((x) => tracks.find((t) => t.id === x)?.title).filter(Boolean);
+    const what = ids.length === 1 ? `「${names[0]}」` : `选中的 ${ids.length} 首歌`;
+    if (!confirm(`从清单中删除${what}？已下载的文件不会被删除。`)) return;
+    return run("delete", async () => {
+      const results = await Promise.allSettled(ids.map((x) => api.deleteTrack(x)));
+      const gone = new Set(ids.filter((_, i) => results[i].status === "fulfilled"));
+      setTracks((xs) => xs!.filter((x) => !gone.has(x.id)));
+      setSelected((sel) => new Set([...sel].filter((x) => !gone.has(x))));
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      if (failed) toast("bad", `${ids.length - gone.size} 首没删掉：${(failed.reason as Error).message}`);
+      else toast("ok", `已删除 ${gone.size} 首`);
+    });
+  };
+
   const allVisibleSelected = visible.length > 0 && visible.every((t) => selected.has(t.id));
 
   return (
@@ -268,6 +284,7 @@ export function PlaylistPage({ id }: { id: number }) {
                   })
                 }
                 onUpdate={(next) => setTracks((xs) => (xs ? xs.map((x) => (x.id === next.id ? next : x)) : xs))}
+                onDelete={() => removeTracks([t.id])}
               />
             ))}
           </tbody>
@@ -292,6 +309,9 @@ export function PlaylistPage({ id }: { id: number }) {
           </button>
           <button className="btn btn-sm" onClick={() => batch("unskip", selectedIds)}>
             <Undo2 size={14} /> 取消跳过
+          </button>
+          <button className="btn btn-sm" disabled={busy === "delete"} onClick={() => removeTracks(selectedIds)}>
+            <Trash2 size={14} /> 删除
           </button>
           <button className="link-btn" onClick={() => setSelected(new Set())}>
             清除选择
@@ -379,12 +399,14 @@ function TrackRow({
   checked,
   onCheck,
   onUpdate,
+  onDelete,
 }: {
   t: Track;
   flash: boolean;
   checked: boolean;
   onCheck: () => void;
   onUpdate: (t: Track) => void;
+  onDelete: () => void;
 }) {
   const reviewable = t.candidate_count > 0 || t.status === "not_found";
   const go = () => reviewable && navigate({ page: "review", id: t.playlist_id, track: t.id });
@@ -428,6 +450,8 @@ function TrackRow({
               <LyricsTag info={t.file.lyrics} />
             </span>
           </div>
+        ) : t.chosen ? (
+          <ChosenSummary t={t} />
         ) : t.best_score != null ? (
           <span className={`score tone-${toneOfScore(t.best_score)}`} title="最佳候选匹配分">
             {Math.round(t.best_score)}
@@ -457,8 +481,35 @@ function TrackRow({
             {t.candidate_count ? `候选 ${t.candidate_count}` : "换关键词搜"}
           </a>
         )}
+        {t.status !== "searching" && t.status !== "queued" && t.status !== "downloading" && (
+          <button className="icon-btn danger row-del" title="从清单删除" aria-label={`删除 ${t.title}`} onClick={onDelete}>
+            <Trash2 size={14} />
+          </button>
+        )}
       </td>
     </tr>
+  );
+}
+
+/** The candidate that will be downloaded: source and quality, its own score, and whose pick it was. */
+function ChosenSummary({ t }: { t: Track }) {
+  const c = t.chosen!;
+  const by = t.chosen_by === "user" ? "已手选" : t.chosen_by === "auto" ? "自动" : "";
+  const who = [c.artist, c.album && `《${c.album}》`].filter(Boolean).join(" · ");
+  return (
+    <div className="pick" title={`${c.title}${who ? ` — ${who}` : ""}`}>
+      <span className="pick-head">
+        <span>{c.provider_label}</span>
+        <span className={`score tone-${toneOfScore(c.score)}`}>
+          {Math.round(c.score)}
+          <small> 分{by && ` · ${by}`}</small>
+        </span>
+      </span>
+      <span className="mono small muted">
+        {c.quality} · {fmtDuration(c.duration)}
+      </span>
+      {who && <span className="pick-sub small muted">{who}</span>}
+    </div>
   );
 }
 

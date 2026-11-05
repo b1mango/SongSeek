@@ -54,6 +54,7 @@ class Settings(Model):
     lyrics: bool = True
     lyrics_translation: bool = False
     lyrics_embed: bool = False
+    theme: Literal["system", "light", "dark"] = "system"
     netease_cookie_set: bool = False
 
 
@@ -95,6 +96,18 @@ class DownloadedFile(Model):
     lyrics: LyricsInfo | None = None
 
 
+class ChosenCandidate(Model):
+    """Snapshot of the chosen candidate, so lists can show what will be downloaded without loading candidates."""
+    id: int
+    provider_label: str
+    title: str
+    artist: str
+    album: str
+    duration: float | None
+    quality: str
+    score: float
+
+
 class Track(ParsedRow):
     lyrics_wanted: bool | None = None
     id: int
@@ -104,6 +117,7 @@ class Track(ParsedRow):
     status: TrackStatus
     chosen_candidate_id: int | None = None
     chosen_by: Literal["auto", "user"] | None = None
+    chosen: ChosenCandidate | None = None
     best_score: float | None = None
     candidate_count: int = 0
     file: DownloadedFile | None = None
