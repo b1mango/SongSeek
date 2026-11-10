@@ -1,11 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { CloudOff, FileUp, ListMusic, Moon, Search, Settings2, Sun, SunMoon } from "lucide-react";
 import { api } from "./api";
 import { ToastProvider, useToast } from "./components";
 import { TitleBar } from "./desktop";
 import { PlayerProvider } from "./player";
 import { href, navigate, requestJobFocus, useRoute, type Route } from "./router";
-import { refreshPlaylists, upsertJob, useLiveConnection, useStore } from "./store";
+import { getState, onEvent, refreshPlaylists, upsertJob, useLiveConnection, useStore } from "./store";
 import { HomePage } from "./pages/Home";
 import { ImportPage } from "./pages/Import";
 import { PlaylistPage } from "./pages/Playlist";
@@ -33,6 +33,8 @@ function Shell() {
     refreshPlaylists().catch((e) => toast("bad", e.message));
   }, [toast]);
 
+  useJobNotices();
+
   return (
     <div className="shell">
       <TitleBar />
@@ -43,6 +45,30 @@ function Shell() {
         </div>
       </main>
     </div>
+  );
+}
+
+const JOB_NAME = { search: "搜索", download: "下载", lyrics: "补歌词" } as const;
+
+/** A toast when a background job the user watched start comes to an end, so nobody has to keep an eye on the sidebar. */
+function useJobNotices() {
+  const toast = useToast();
+  const running = useRef(new Set<number>());
+  useEffect(
+    () =>
+      onEvent("job", (j) => {
+        if (j.status === "running") return void running.current.add(j.id);
+        if (!running.current.delete(j.id)) return;
+        const name = JOB_NAME[j.kind];
+        const where = j.playlist_id != null ? getState().playlists.find((p) => p.id === j.playlist_id)?.name : null;
+        const prefix = where ? `「${where}」` : "";
+        if (j.status === "error") return toast("bad", `${prefix}${name}中断了，可以重新开始`);
+        if (j.status === "cancelled") return toast("info", `${prefix}已停止${name}，完成 ${j.completed}/${j.total} 首`);
+        const ok = j.completed - j.failed;
+        const miss = j.kind === "search" ? "没找到" : "失败";
+        toast(j.failed ? "info" : "ok", `${prefix}${name}完成：${ok} 首成功${j.failed ? `，${j.failed} 首${miss}` : ""}`);
+      }),
+    [toast],
   );
 }
 

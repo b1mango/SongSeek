@@ -2,7 +2,9 @@ from dataclasses import field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 from pydantic.dataclasses import dataclass
 
 TrackStatus = Literal["pending", "searching", "matched", "needs_review", "not_found", "queued", "downloading", "done", "failed", "skipped"]
@@ -66,6 +68,7 @@ class LyricsInfo(Model):
     translated: bool = False
     embedded: bool = False
     error: str | None = None
+    refresh_error: str | None = None
 
 
 class LyricsResponse(Model):
@@ -94,6 +97,8 @@ class DownloadedFile(Model):
     provider: str | None = None
     provider_label: str | None = None
     lyrics: LyricsInfo | None = None
+    candidate_id: int | None = None
+    chosen_by: Literal["auto", "user"] | None = None
 
 
 class ChosenCandidate(Model):
@@ -110,6 +115,7 @@ class ChosenCandidate(Model):
 
 class Track(ParsedRow):
     lyrics_wanted: bool | None = None
+    providers: list[str] | None = None
     id: int
     playlist_id: int
     position: int
@@ -121,9 +127,23 @@ class Track(ParsedRow):
     best_score: float | None = None
     candidate_count: int = 0
     file: DownloadedFile | None = None
+    search_failed: bool = False  # not_found only because every source errored or timed out
     error: str | None = None
     note: str = ""
     updated_at: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_derived(cls, data: Any) -> Any:
+        # file_missing is recomputed from disk on every read; a dumped copy may carry a stale value.
+        if isinstance(data, dict) and "file_missing" in data:
+            data = {k: v for k, v in data.items() if k != "file_missing"}
+        return data
+
+    @computed_field
+    @property
+    def file_missing(self) -> bool:
+        return self.status == "done" and self.file is not None and not Path(self.file.path).is_file()
 
 
 class Playlist(Model):

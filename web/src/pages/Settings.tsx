@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Activity, CircleCheck, CircleX, FolderOpen, Globe, KeyRound, LoaderCircle, Radar, Save } from "lucide-react";
 import { api } from "../api";
 import { useToast } from "../components";
@@ -17,7 +17,10 @@ export function SettingsPage() {
   const system = useSystem();
 
   useEffect(() => {
-    api.providers().then(setProviders).catch((e) => toast("bad", e.message));
+    api
+      .providers()
+      .then(setProviders)
+      .catch((e) => toast("bad", e.message));
     api
       .settings()
       .then((s) => {
@@ -57,17 +60,41 @@ export function SettingsPage() {
     }
   }
 
-  async function save(extra?: { netease_cookie?: string }) {
-    if (!draft) return;
+  // Download options save themselves shortly after the last edit, like every other switch on this page.
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedOnce, setSavedOnce] = useState(false);
+  const latest = useRef(draft);
+  latest.current = draft;
+  const dirty = !!settings && !!draft && JSON.stringify(editable(settings)) !== JSON.stringify(editable(draft));
+  useEffect(() => {
+    if (!dirty || !draft) return;
+    const timer = setTimeout(async () => {
+      setSaving(true);
+      try {
+        const s = await api.saveSettings(editable(draft));
+        setSettings(s);
+        // keep whatever the user typed meanwhile; only adopt the server's normalised values if nothing changed
+        if (latest.current === draft) setDraft(s);
+        setLyricsPref(s.lyrics ?? true);
+        setSaveError(null);
+        setSavedOnce(true);
+      } catch (e) {
+        setSaveError((e as Error).message);
+      } finally {
+        setSaving(false);
+      }
+    }, 700);
+    return () => clearTimeout(timer);
+  }, [dirty, draft]);
+
+  async function saveCookie(value: string) {
     setSaving(true);
     try {
-      const { netease_cookie_set: _ignored, proxy: _proxy, proxy_mode: _mode, ...patch } = draft;
-      const s = await api.saveSettings({ ...patch, ...extra });
+      const s = await api.saveSettings({ netease_cookie: value });
       setSettings(s);
-      setDraft(s);
-      setLyricsPref(s.lyrics ?? true);
+      setDraft((d) => (d ? { ...d, netease_cookie_set: s.netease_cookie_set } : s));
       setCookie("");
-      toast("ok", "设置已保存");
+      toast("ok", value ? "Cookie 已保存" : "Cookie 已清除");
     } catch (e) {
       toast("bad", (e as Error).message);
     } finally {
@@ -75,7 +102,6 @@ export function SettingsPage() {
     }
   }
 
-  const dirty = settings && draft && JSON.stringify(settings) !== JSON.stringify(draft);
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setDraft((d) => (d ? { ...d, [k]: v } : d));
 
   return (
@@ -173,7 +199,9 @@ export function SettingsPage() {
           <label className="field">
             <span className="field-label">文件名模板</span>
             <input className="input mono" value={draft.filename_template} onChange={(e) => set("filename_template", e.target.value)} />
-            <span className="field-help">可用 {"{title}"} {"{artist}"} {"{album}"}，扩展名自动补上。</span>
+            <span className="field-help">
+              可用 {"{title}"} {"{artist}"} {"{album}"}，扩展名自动补上。
+            </span>
           </label>
           <label className="check-line">
             <input type="checkbox" checked={draft.group_by_playlist} onChange={(e) => set("group_by_playlist", e.target.checked)} />
@@ -200,17 +228,43 @@ export function SettingsPage() {
           <div className="grid-2">
             <label className="field">
               <span className="field-label">同时搜索</span>
-              <input className="input mono" type="number" min={1} max={16} value={draft.search_concurrency} onChange={(e) => set("search_concurrency", Number(e.target.value))} />
+              <input
+                className="input mono"
+                type="number"
+                min={1}
+                max={16}
+                value={draft.search_concurrency}
+                onChange={(e) => set("search_concurrency", Number(e.target.value))}
+              />
             </label>
             <label className="field">
               <span className="field-label">同时下载</span>
-              <input className="input mono" type="number" min={1} max={8} value={draft.download_concurrency} onChange={(e) => set("download_concurrency", Number(e.target.value))} />
+              <input
+                className="input mono"
+                type="number"
+                min={1}
+                max={8}
+                value={draft.download_concurrency}
+                onChange={(e) => set("download_concurrency", Number(e.target.value))}
+              />
             </label>
           </div>
-          <div className="row end">
-            <button className="btn btn-primary" disabled={!dirty || saving} onClick={() => save()}>
-              {saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />} 保存设置
-            </button>
+          <div className={`autosave small${saveError ? " tone-text-bad" : " muted"}`} aria-live="polite">
+            {saveError ? (
+              <>
+                <CircleX size={13} /> 没有保存：{saveError}
+              </>
+            ) : saving || dirty ? (
+              <>
+                <LoaderCircle className="spin" size={13} /> 正在保存…
+              </>
+            ) : savedOnce ? (
+              <>
+                <CircleCheck size={13} /> 已自动保存
+              </>
+            ) : (
+              "修改后自动保存"
+            )}
           </div>
         </section>
       )}
@@ -231,8 +285,8 @@ export function SettingsPage() {
             <KeyRound size={17} /> 网易云 Cookie（可选）
           </h2>
           <p className="muted small">
-            填写后可以下载会员歌曲和更高音质。Cookie 只保存在本机数据目录，界面和日志都不会显示。
-            当前状态：{settings.netease_cookie_set ? <b className="tone-text-ok">已设置</b> : <b>未设置</b>}
+            填写后可以下载会员歌曲和更高音质。Cookie 只保存在本机数据目录，界面和日志都不会显示。 当前状态：
+            {settings.netease_cookie_set ? <b className="tone-text-ok">已设置</b> : <b>未设置</b>}
           </p>
           <div className="row gap-8">
             <input
@@ -243,11 +297,11 @@ export function SettingsPage() {
               value={cookie}
               onChange={(e) => setCookie(e.target.value)}
             />
-            <button className="btn" disabled={!cookie.trim() || saving} onClick={() => save({ netease_cookie: cookie.trim() })}>
+            <button className="btn" disabled={!cookie.trim() || saving} onClick={() => saveCookie(cookie.trim())}>
               保存
             </button>
             {settings.netease_cookie_set && (
-              <button className="btn btn-ghost danger" disabled={saving} onClick={() => save({ netease_cookie: "" })}>
+              <button className="btn btn-ghost danger" disabled={saving} onClick={() => saveCookie("")}>
                 清除
               </button>
             )}
@@ -277,7 +331,10 @@ function NetworkCard({ settings, onSaved }: { settings: Settings; onSaved: (s: S
   const [saving, setSaving] = useState(false);
 
   const refresh = useCallback(() => {
-    api.proxy().then(setStatus).catch(() => setStatus(null));
+    api
+      .proxy()
+      .then(setStatus)
+      .catch(() => setStatus(null));
   }, []);
   useEffect(refresh, [refresh, settings.proxy_mode, settings.proxy]);
   useEffect(() => setAddress(settings.proxy), [settings.proxy]);
@@ -416,4 +473,10 @@ function AutoStatus({ status, onUse }: { status: ProxyStatus | null; onUse: (pro
       )}
     </div>
   );
+}
+
+/** The fields the download card edits; cookie, proxy and theme have their own controls and must not be overwritten from a stale draft. */
+function editable(s: Settings) {
+  const { netease_cookie_set: _c, proxy: _p, proxy_mode: _m, theme: _t, ...rest } = s;
+  return rest;
 }

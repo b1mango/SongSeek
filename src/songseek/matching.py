@@ -64,10 +64,10 @@ def evaluate_candidates(track: Track, raws: list[RawCandidate], labels: dict[str
     return candidates
 
 
-def same_recording(track: Track, chosen: Candidate, candidate: Candidate) -> bool:
+def same_recording(chosen: Candidate, candidate: Candidate) -> bool:
     return (title_key(candidate.title) == title_key(chosen.title)
-            and artists_match(track.artist, candidate.artist)
-            and set(candidate.flags) == set(chosen.flags) == set(track.flags)
+            and artists_match(chosen.artist, candidate.artist)
+            and set(candidate.flags) == set(chosen.flags)
             and (chosen.duration is None or candidate.duration is None
                  or abs(candidate.duration - chosen.duration) <= tolerance(chosen.duration)))
 

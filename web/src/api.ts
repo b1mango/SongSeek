@@ -18,6 +18,9 @@ import type {
   Track,
 } from "./types";
 
+/** `updated`: tracks that actually changed; `skipped`: the rest, each with a reason. */
+export type BatchResult = { updated: Track[]; skipped?: { id: number; reason: string }[] };
+
 export class ApiError extends Error {
   code: string;
   constructor(code: string, message: string) {
@@ -83,10 +86,7 @@ const json = (method: string, body?: unknown): RequestInit => ({
   body: body === undefined ? undefined : JSON.stringify(body),
 });
 
-export type ParseInput =
-  | { kind: "file"; file: File }
-  | { kind: "text"; text: string }
-  | { kind: "url"; url: string };
+export type ParseInput = { kind: "file"; file: File } | { kind: "text"; text: string } | { kind: "url"; url: string };
 
 export const api = {
   parse(input: ParseInput, mapping?: Record<ColumnKey, string | null>) {
@@ -99,8 +99,8 @@ export const api = {
     const body = input.kind === "text" ? { text: input.text } : { url: input.url };
     return request<ParseResult>("/import/parse", json("POST", mapping ? { ...body, mapping } : body));
   },
-  createPlaylist: (name: string, source: PlaylistSource, rows: ParsedRow[]) =>
-    request<Playlist>("/playlists", json("POST", { name, source, rows })),
+  createPlaylist: (name: string, source: PlaylistSource, rows: ParsedRow[]) => request<Playlist>("/playlists", json("POST", { name, source, rows })),
+  addTracks: (id: number, rows: ParsedRow[]) => request<{ added: Track[]; duplicates: number }>(`/playlists/${id}/tracks`, json("POST", { rows })),
   playlists: () => request<Playlist[]>("/playlists"),
   playlist: (id: number) => request<{ playlist: Playlist; tracks: Track[] }>(`/playlists/${id}`),
   renamePlaylist: (id: number, name: string) => request<Playlist>(`/playlists/${id}`, json("PATCH", { name })),
@@ -114,7 +114,7 @@ export const api = {
   choose: (id: number, candidateId: number) => request<Track>(`/tracks/${id}/choose`, json("POST", { candidate_id: candidateId })),
   researchTrack: (id: number, query?: string, providers?: string[]) =>
     request<{ track: Track; candidates: Candidate[] }>(`/tracks/${id}/search`, json("POST", { query, providers })),
-  batch: (ids: number[], action: BatchAction) => request<{ updated: Track[] }>("/tracks/batch", json("POST", { ids, action })),
+  batch: (ids: number[], action: BatchAction) => request<BatchResult>("/tracks/batch", json("POST", { ids, action })),
   audioUrl: (id: number) => `/api/tracks/${id}/audio`,
   trackLyricsUrl: (id: number) => `/api/tracks/${id}/lyrics`,
   candidateLyricsUrl: (id: number) => `/api/candidates/${id}/lyrics`,
@@ -123,7 +123,13 @@ export const api = {
   reveal: (id: number) => request<{ ok: true }>(`/tracks/${id}/reveal`, json("POST")),
 
   /** Streams per-provider results as NDJSON. Throws ApiError("http_404") on servers without streaming. */
-  async searchStream(query: string, duration: number | undefined, providers: string[] | undefined, onEvent: (event: SearchEvent) => void, signal?: AbortSignal) {
+  async searchStream(
+    query: string,
+    duration: number | undefined,
+    providers: string[] | undefined,
+    onEvent: (event: SearchEvent) => void,
+    signal?: AbortSignal,
+  ) {
     let res: Response;
     try {
       res = await fetch("/api/search/stream", { ...json("POST", { query, duration, providers }), signal });
@@ -154,10 +160,10 @@ export const api = {
     flush(true);
   },
   searchOne: (query: string, duration?: number, providers?: string[]) =>
-    request<
-      | { mode?: "song"; track: Track; candidates: Candidate[] }
-      | { mode: "artist"; artist: ArtistInfo; songs: ArtistSong[] }
-    >("/search", json("POST", { query, duration, providers })),
+    request<{ mode?: "song"; track: Track; candidates: Candidate[] } | { mode: "artist"; artist: ArtistInfo; songs: ArtistSong[] }>(
+      "/search",
+      json("POST", { query, duration, providers }),
+    ),
   downloadArtistSong: (token: string, lyrics?: boolean, providers?: string[]) =>
     request<{ track: Track; job: Job | null }>(`/artist-songs/${encodeURIComponent(token)}/download`, json("POST", { lyrics, providers })),
   searchPlaylist: (id: number, trackIds?: number[]) => request<Job>(`/playlists/${id}/search`, json("POST", { track_ids: trackIds })),

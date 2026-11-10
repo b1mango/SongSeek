@@ -31,6 +31,12 @@ class Database:
                 UNIQUE(track_id, provider, source_id)
             );
             CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS publications (
+                track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+                candidate_id INTEGER NOT NULL,
+                path TEXT NOT NULL,
+                sha256 TEXT NOT NULL
+            );
         """)
 
         with self.transaction() as connection:
@@ -68,6 +74,16 @@ class Database:
             rows = self.connection.execute(query, (value,) if column else ()).fetchall()
         return [json.loads(row["data"]) for row in rows]
 
+    def track_status(self, identifier: int) -> str:
+        with self.lock:
+            return self.connection.execute("SELECT json_extract(data, '$.status') FROM tracks WHERE id=?", (identifier,)).fetchone()[0]
+
+    def playlist_counts(self, identifier: int) -> dict[str, int]:
+        with self.lock:
+            rows = self.connection.execute("SELECT json_extract(data, '$.status') AS status, COUNT(*) AS count "
+                                           "FROM tracks WHERE playlist_id=? GROUP BY json_extract(data, '$.status')", (identifier,)).fetchall()
+        return {row["status"]: row["count"] for row in rows}
+
     def insert(self, table: str, data: dict, **columns) -> int:
         with self.transaction() as connection:
             values = {"data": json.dumps(data, ensure_ascii=False), **columns}
@@ -92,6 +108,19 @@ class Database:
         if row is None:
             raise SongSeekError("候选不存在", "not_found", 404)
         return json.loads(row["raw"])
+
+    def prepare_publication(self, track_id: int, candidate_id: int, path: str, sha256: str) -> None:
+        with self.transaction() as connection:
+            connection.execute("INSERT OR REPLACE INTO publications (track_id, candidate_id, path, sha256) VALUES (?, ?, ?, ?)",
+                               (track_id, candidate_id, path, sha256))
+
+    def publication(self, track_id: int):
+        with self.lock:
+            return self.connection.execute("SELECT candidate_id, path, sha256 FROM publications WHERE track_id=?", (track_id,)).fetchone()
+
+    def clear_publication(self, track_id: int) -> None:
+        with self.transaction() as connection:
+            connection.execute("DELETE FROM publications WHERE track_id=?", (track_id,))
 
     def close(self) -> None:
         self.connection.close()

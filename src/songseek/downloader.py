@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import mutagen
@@ -26,12 +27,18 @@ from mutagen.wave import WAVE
 from .config import Config
 from .covers import fetch_cover, image_type
 from .tools import require_tool
-from .errors import SongSeekError
+from .errors import SongSeekError, storage_error
 from .models import AudioSource, DownloadedFile, RawCandidate, Track
 from .normalize import tolerance
 from .providers.base import BaseProvider, audio_url
 
 _publish_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class DownloadDestination:
+    directory: Path
+    filename_template: str
 
 
 def digest(path: Path) -> str:
@@ -153,7 +160,9 @@ def tag(path: Path, track: Track, raw: RawCandidate, cover: bytes | None = None)
         return
     try:
         audio.save()
-    except MutagenError:
+    except MutagenError as error:
+        if error.args and isinstance(error.args[0], OSError):
+            raise storage_error(error.args[0]) from None
         raise SongSeekError("音频标签写入失败", "tag_failed") from None
 
 
@@ -163,6 +172,9 @@ def remux(path: Path, ext: str) -> None:
     try:
         result = subprocess.run([require_tool("ffmpeg"), "-v", "error", "-xerror", "-i", str(path), "-map", "0:a:0", "-c:a", "copy", "-f", "ipod" if ext == "m4a" else "opus", "-y", str(output)], capture_output=True, timeout=120)
         if result.returncode:
+            if any(message in result.stderr.lower() for message in
+                   (b"no space left on device", b"disk quota exceeded", b"permission denied", b"read-only file system", b"not a directory", b"is a directory")):
+                raise SongSeekError("音频保存失败，请清理磁盘空间或在设置中更换有写入权限的输出目录后重试", "storage_error")
             raise SongSeekError("音频容器转换失败", "invalid_audio")
         output.chmod(path.stat().st_mode & 0o777)
         os.replace(output, path)
@@ -170,7 +182,7 @@ def remux(path: Path, ext: str) -> None:
         output.unlink(missing_ok=True)
 
 
-def publish(partial: Path, target: Path) -> Path:
+def publish(partial: Path, target: Path, prepare: Callable[[Path, str], None] | None = None) -> Path:
     # 同一目录的锁让多进程也不会相互覆盖最终文件。锁文件放在系统临时目录，
     # 不在用户的音乐文件夹里留下文件（Windows 不隐藏点开头的文件）。
     key = hashlib.sha1(str(target.parent.resolve()).encode()).hexdigest()[:16]
@@ -185,14 +197,20 @@ def publish(partial: Path, target: Path) -> Path:
             import fcntl
             fcntl.flock(lock, fcntl.LOCK_EX)
         try:
+            # A name is free only if no file of any extension shares its stem, so the .lrc next to it is ours alone.
+            stems = {path.stem.casefold() for path in target.parent.iterdir()}
             sha = digest(partial)
             chosen, index = target, 1
-            while chosen.exists():
-                if digest(chosen) == sha:
+            while chosen.stem.casefold() in stems:
+                if chosen.exists() and digest(chosen) == sha:  # the very same audio is already here: reuse it
+                    if prepare:
+                        prepare(chosen, sha)
                     partial.unlink()
                     return chosen
                 index += 1
                 chosen = target.with_name(f"{target.stem} ({index}){target.suffix}")
+            if prepare:
+                prepare(chosen, sha)
             os.replace(partial, chosen)
             return chosen
         finally:
@@ -207,17 +225,45 @@ class Downloader:
     def __init__(self, config: Config):
         self.config = config
 
-    def download(self, track: Track, raw: RawCandidate, provider: BaseProvider, playlist_name: str,
-                 on_progress: Callable[[str, int, int | None], None] | None = None) -> DownloadedFile:
+    def destination(self, playlist_name: str) -> DownloadDestination:
         settings = self.config.settings
         directory = Path(settings.output_dir)
         if settings.group_by_playlist:
             directory /= safe_name(playlist_name)
-        directory.mkdir(parents=True, exist_ok=True)
-        partial = directory / f".songseek-{uuid.uuid4().hex}.part"
-        fd = os.open(partial, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        os.close(fd)
+        return DownloadDestination(directory, settings.filename_template)
+
+    def cleanup_partials(self):
+        directory = Path(self.config.settings.output_dir)
         try:
+            if not directory.is_dir():
+                return
+            directories = [directory] + [path for path in directory.iterdir() if path.is_dir() and not path.is_symlink()]
+        except OSError:
+            return  # 输出目录不可用时仍允许启动，以便在设置中更换目录。
+        for folder in directories:
+            try:
+                for path in folder.glob(".songseek-*.part"):
+                    if path.is_file() and not path.is_symlink():
+                        path.unlink()
+            except OSError:
+                continue
+
+    def recovered_file(self, path: Path, raw: RawCandidate) -> DownloadedFile:
+        info = probe(path)
+        return DownloadedFile(path=str(path.resolve()), size=path.stat().st_size, format=info["format"], bitrate=info["bitrate"], duration=info["duration"], sha256=digest(path),
+                              provider=raw.provider, provider_label=next((p.label for p in self.config.providers if p.id == raw.provider), raw.provider))
+
+    def download(self, track: Track, raw: RawCandidate, provider: BaseProvider, playlist_name: str,
+                 on_progress: Callable[[str, int, int | None], None] | None = None, *,
+                 destination: DownloadDestination | None = None,
+                 on_publish: Callable[[Path, str], None] | None = None) -> DownloadedFile:
+        destination = destination or self.destination(playlist_name)
+        directory = destination.directory
+        partial = directory / f".songseek-{uuid.uuid4().hex}.part"
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            fd = os.open(partial, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            os.close(fd)
             source = provider.resolve(raw)
             downloaded, total = 0, None
             def progress(count: int, size: int | None):
@@ -237,12 +283,17 @@ class Downloader:
                 if result is not None:
                     cover = result[0]
             tag(partial, track, raw, cover)
-            filename = safe_name(settings.filename_template.format(artist=track.artist or raw.artist, title=track.title, album=track.album or raw.album))
-            target = publish(partial, directory / f"{filename}.{info['format']}")
+            filename = safe_name(destination.filename_template.format(artist=track.artist or raw.artist, title=track.title, album=track.album or raw.album))
+            target = publish(partial, directory / f"{filename}.{info['format']}", prepare=on_publish) if on_publish else publish(partial, directory / f"{filename}.{info['format']}")
             return DownloadedFile(path=str(target.resolve()), size=target.stat().st_size, format=info["format"], bitrate=info["bitrate"], duration=info["duration"], sha256=digest(target),
                                   provider=raw.provider, provider_label=next((p.label for p in self.config.providers if p.id == raw.provider), raw.provider))
+        except OSError as error:
+            raise storage_error(error) from None
         finally:
-            partial.unlink(missing_ok=True)
+            try:
+                partial.unlink(missing_ok=True)
+            except OSError as error:
+                raise storage_error(error) from None
 
 
 class PreviewCache:

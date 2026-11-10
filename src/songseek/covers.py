@@ -84,7 +84,7 @@ class CoverManager:
         track = self.service.track(chosen.track_id)
         alternatives = [candidate for candidate in self.service.candidates(track.id)
                         if candidate.id != chosen.id and candidate.verdict != "reject"]
-        alternatives.sort(key=lambda candidate: not same_recording(track, chosen, candidate))
+        alternatives.sort(key=lambda candidate: not same_recording(chosen, candidate))
         return self.raws([self.service.raw_candidate(candidate.id) for candidate in [chosen] + alternatives])
 
     def raws(self, raws) -> tuple[bytes, str]:

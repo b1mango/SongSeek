@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   Check,
+  Download,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
   CircleCheck,
   Crown,
   ExternalLink,
@@ -16,13 +18,13 @@ import {
   SkipForward,
   Undo2,
 } from "lucide-react";
-import { api } from "../api";
-import { CheckChips, DurationRuler, Flags, StatusBadge, problemsOf, toneOfScore, useToast } from "../components";
+import { api, ApiError } from "../api";
+import { CheckChips, DurationRuler, isTyping, Flags, StatusBadge, problemsOf, toneOfScore, useToast } from "../components";
 import { fmtDelta, fmtDuration, tolerance } from "../format";
 import { useFlipList } from "../motion";
-import { PlayButton } from "../player";
-import { href } from "../router";
-import { onEvent, upsertPlaylist, useStore } from "../store";
+import { PlayButton, usePlayer, type Playable } from "../player";
+import { href, navigate } from "../router";
+import { getPlaylistRevision, isPlaylistDeleted, isTrackDeleted, onEvent, upsertJob, upsertPlaylist, useStore } from "../store";
 import type { Candidate, Track } from "../types";
 
 type QueueMode = "review" | "all";
@@ -38,25 +40,60 @@ export function ReviewPage({ id, focus }: { id: number; focus?: number }) {
   const [currentId, setCurrentId] = useState<number | null>(focus ?? null);
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [cands, setCands] = useState<Record<number, Candidate[]>>({});
+  const [hl, setHl] = useState<number | null>(null);
+  const player = usePlayer();
 
   useEffect(() => {
-    api
-      .playlist(id)
-      .then(({ playlist, tracks }) => {
-        upsertPlaylist(playlist);
+    let active = true;
+    let request = 0;
+    let trackEvents = 0;
+    let initialized = false;
+    const load = () => {
+      const currentRequest = ++request;
+      const initialTrackEvents = trackEvents;
+      const initialPlaylistRevision = getPlaylistRevision(id);
+      api.playlist(id).then(({ playlist, tracks: received }) => {
+        if (!active || currentRequest !== request || isPlaylistDeleted(id)) return;
+        if (trackEvents !== initialTrackEvents) return load();
+        const tracks = received.filter((track) => !isTrackDeleted(track.id, id));
+        if (getPlaylistRevision(id) === initialPlaylistRevision) upsertPlaylist(playlist);
         setTracks(tracks);
         const ids = new Set(tracks.filter((t) => t.status === "needs_review").map((t) => t.id));
-        if (focus) ids.add(focus);
-        setSessionIds(ids);
-        if (ids.size === 0) setMode("all");
-        setCurrentId((cur) => cur ?? tracks.find((t) => ids.has(t.id))?.id ?? tracks.find((t) => t.candidate_count > 0)?.id ?? null);
-      })
-      .catch((e) => toast("bad", e.message));
-    return onEvent("track", (t) => {
+        if (focus && !isTrackDeleted(focus, id)) ids.add(focus);
+        if (!initialized) {
+          initialized = true;
+          setSessionIds(ids);
+          if (ids.size === 0) setMode("all");
+          setCurrentId((cur) => cur ?? tracks.find((t) => ids.has(t.id))?.id ?? tracks.find((t) => t.candidate_count > 0)?.id ?? null);
+        } else {
+          setSessionIds((old) => new Set([...old, ...ids].filter((trackId) => !isTrackDeleted(trackId, id))));
+        }
+      }).catch((e) => {
+        if (active && currentRequest === request && !isPlaylistDeleted(id)) toast("bad", e.message);
+      });
+    };
+    const offTrack = onEvent("track", (t) => {
       if (t.playlist_id !== id) return;
+      trackEvents++;
       setTracks((xs) => (xs ? xs.map((x) => (x.id === t.id ? t : x)) : xs));
       if (t.status === "needs_review") setSessionIds((s) => (s.has(t.id) ? s : new Set(s).add(t.id)));
     });
+    const offDeleted = onEvent("track_deleted", (t) => {
+      if (t.playlist_id !== id) return;
+      trackEvents++;
+      setTracks((xs) => xs?.filter((track) => track.id !== t.id) ?? null);
+      setChecked((old) => new Set([...old].filter((trackId) => trackId !== t.id)));
+      setSessionIds((old) => new Set([...old].filter((trackId) => trackId !== t.id)));
+      setCurrentId((current) => current === t.id ? null : current);
+    });
+    const offResync = onEvent("resync", load);
+    load();
+    return () => {
+      active = false;
+      offTrack();
+      offDeleted();
+      offResync();
+    };
   }, [id, focus, toast]);
 
   const queue = useMemo(() => {
@@ -105,8 +142,15 @@ export function ReviewPage({ id, focus }: { id: number; focus?: number }) {
   const replaceTrack = (t: Track) => setTracks((xs) => xs!.map((x) => (x.id === t.id ? t : x)));
 
   async function choose(c: Candidate, advance = true) {
+    const had = tracks?.find((x) => x.id === c.track_id)?.file;
     try {
-      replaceTrack(await api.choose(c.track_id, c.id));
+      const next = await api.choose(c.track_id, c.id);
+      replaceTrack(next);
+      // Swapping the version of a downloaded song: fetch the new one right away; the old file stays until it succeeds.
+      if (had && next.status === "matched") {
+        upsertJob(await api.downloadPlaylist(id, [c.track_id]));
+        toast("info", "正在下载新版本，成功后替换原文件");
+      }
       if (advance) step(1, true);
     } catch (e) {
       toast("bad", (e as Error).message);
@@ -115,36 +159,51 @@ export function ReviewPage({ id, focus }: { id: number; focus?: number }) {
 
   async function skip(t: Track) {
     try {
-      const { updated } = await api.batch([t.id], t.status === "skipped" ? "unskip" : "skip");
+      const { updated, skipped = [] } = await api.batch([t.id], t.status === "skipped" ? "unskip" : "skip");
       updated.forEach(replaceTrack);
+      if (skipped.length) return toast("info", skipped[0].reason);
       if (t.status !== "skipped") step(1, true);
     } catch (e) {
       toast("bad", (e as Error).message);
     }
   }
 
+  async function downloadAll() {
+    try {
+      upsertJob(await api.downloadPlaylist(id));
+      navigate({ page: "playlist", id });
+    } catch (e) {
+      toast(e instanceof ApiError && e.code === "no_eligible_tracks" ? "info" : "bad", (e as Error).message);
+    }
+  }
+
   async function batch(action: "accept_best" | "skip") {
     const ids = [...checked];
     try {
-      const { updated } = await api.batch(ids, action);
+      const { updated, skipped = [] } = await api.batch(ids, action);
       updated.forEach(replaceTrack);
       setChecked(new Set());
-      toast("ok", action === "accept_best" ? `已通过 ${updated.length} 首的最佳候选` : `已跳过 ${updated.length} 首`);
+      const done = action === "accept_best" ? `已通过 ${updated.length} 首的最佳候选` : `已跳过 ${updated.length} 首`;
+      toast("ok", skipped.length ? `${done}，${skipped.length} 首未处理（${skipped[0].reason}）` : done);
     } catch (e) {
       toast("bad", (e as Error).message);
     }
   }
 
-  // Keyboard: J/K next/prev, 1-9 choose, Enter choose best, S skip, Space play best.
+  // Keyboard: J/K next/prev, 1-9 choose, Enter choose best, S skip, Space preview, Esc back to the list.
   const list = current ? cands[current.id] : undefined;
   const keyRef = useRef<(e: KeyboardEvent) => void>(() => {});
   keyRef.current = (e: KeyboardEvent) => {
-    const tag = (e.target as HTMLElement).tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "j" || e.key === "ArrowDown") (e.preventDefault(), step(1));
     else if (e.key === "k" || e.key === "ArrowUp") (e.preventDefault(), step(-1));
     else if (e.key === "s" && current) skip(current);
-    else if (e.key === "Enter" && list) {
+    else if (e.key === "Escape") navigate({ page: "playlist", id });
+    else if (e.key === " " && list && (e.target as HTMLElement).tagName !== "BUTTON") {
+      // the hovered candidate, else the chosen one, else the best
+      const c = list.find((x) => x.id === hl) ?? list.find((x) => x.id === current?.chosen_candidate_id) ?? list.find((x) => x.verdict !== "reject");
+      if (c) (e.preventDefault(), player.toggle(candPlayable(c)));
+    } else if (e.key === "Enter" && list) {
       const best = list.find((c) => c.verdict !== "reject");
       if (best) choose(best);
     } else if (/^[1-9]$/.test(e.key) && list) {
@@ -188,6 +247,12 @@ export function ReviewPage({ id, focus }: { id: number; focus?: number }) {
             </button>
           </div>
         </div>
+
+        {remaining === 0 && (playlist?.counts.matched ?? 0) > 0 && (
+          <button className="btn btn-primary queue-cta" onClick={downloadAll}>
+            <Download size={15} /> 下载已选定的 {playlist!.counts.matched} 首
+          </button>
+        )}
 
         <div className="queue-batch">
           <label className="row gap-8 small">
@@ -251,6 +316,8 @@ export function ReviewPage({ id, focus }: { id: number; focus?: number }) {
             onNext={() => step(1)}
             onTrack={replaceTrack}
             onCandidates={(l) => setCands((m) => ({ ...m, [current.id]: l }))}
+            hl={hl}
+            setHl={setHl}
           />
         ) : (
           <div className="center-fill muted">从左侧选一首歌开始</div>
@@ -284,6 +351,8 @@ function Focus({
   onNext,
   onTrack,
   onCandidates,
+  hl,
+  setHl,
 }: {
   track: Track;
   candidates: Candidate[] | undefined;
@@ -293,9 +362,10 @@ function Focus({
   onNext: () => void;
   onTrack: (t: Track) => void;
   onCandidates: (l: Candidate[]) => void;
+  hl: number | null;
+  setHl: (id: number | null) => void;
 }) {
   const toast = useToast();
-  const [hl, setHl] = useState<number | null>(null);
   const [showRejected, setShowRejected] = useState(false);
   const [query, setQuery] = useState(`${t.title} ${t.artist}`.trim());
   const [searching, setSearching] = useState(false);
@@ -379,9 +449,25 @@ function Focus({
         </div>
       </div>
 
-      <Verdict t={t} best={best} chosen={chosen} loaded={!!candidates} />
+      <Verdict
+        t={t}
+        best={best}
+        chosen={chosen}
+        loaded={!!candidates}
+        onRedownload={async () => {
+          try {
+            const { updated, skipped = [] } = await api.batch([t.id], "redownload");
+            updated.forEach(onTrack);
+            toast("info", skipped.length ? skipped[0].reason : "正在按选定的版本重新下载");
+          } catch (e) {
+            toast("bad", (e as Error).message);
+          }
+        }}
+      />
 
-      {candidates && candidates.length > 0 && <DurationRuler target={t.duration} candidates={candidates} highlight={hl ?? chosen?.id ?? null} onPick={pick} />}
+      {candidates && candidates.length > 0 && (
+        <DurationRuler target={t.duration} candidates={candidates} highlight={hl ?? chosen?.id ?? null} onPick={pick} />
+      )}
 
       {!candidates ? (
         <div className="center-fill pad">
@@ -404,7 +490,16 @@ function Focus({
             </thead>
             <tbody ref={body}>
               {viable.map((c) => (
-                <CandRow key={c.id} c={c} t={t} chosen={c.id === t.chosen_candidate_id} hl={hl === c.id} rowRef={(el) => (rowRefs.current[c.id] = el)} onChoose={onChoose} onHover={setHl} />
+                <CandRow
+                  key={c.id}
+                  c={c}
+                  t={t}
+                  chosen={c.id === t.chosen_candidate_id}
+                  hl={hl === c.id}
+                  rowRef={(el) => (rowRefs.current[c.id] = el)}
+                  onChoose={onChoose}
+                  onHover={setHl}
+                />
               ))}
               {viable.length === 0 && (
                 <tr>
@@ -425,7 +520,16 @@ function Focus({
               )}
               {showRejected &&
                 rejected.map((c) => (
-                  <CandRow key={c.id} c={c} t={t} chosen={c.id === t.chosen_candidate_id} hl={hl === c.id} rowRef={(el) => (rowRefs.current[c.id] = el)} onChoose={onChoose} onHover={setHl} />
+                  <CandRow
+                    key={c.id}
+                    c={c}
+                    t={t}
+                    chosen={c.id === t.chosen_candidate_id}
+                    hl={hl === c.id}
+                    rowRef={(el) => (rowRefs.current[c.id] = el)}
+                    onChoose={onChoose}
+                    onHover={setHl}
+                  />
                 ))}
             </tbody>
           </table>
@@ -466,14 +570,45 @@ function Focus({
         </div>
       </div>
       <div className="kbd-hint muted small">
-        <Keyboard size={13} aria-hidden /> <kbd>J</kbd>/<kbd>K</kbd> 切换歌曲 · <kbd>1</kbd>–<kbd>9</kbd> 选对应候选 · <kbd>↵</kbd> 选最佳 · <kbd>S</kbd> 跳过
+        <Keyboard size={13} aria-hidden /> <kbd>J</kbd>/<kbd>K</kbd> 切换歌曲 · <kbd>1</kbd>–<kbd>9</kbd> 选对应候选 · <kbd>↵</kbd> 选最佳 ·{" "}
+        <kbd>空格</kbd> 试听 · <kbd>S</kbd> 跳过 · <kbd>Esc</kbd> 返回清单
       </div>
     </div>
   );
 }
 
-function Verdict({ t, best, chosen, loaded }: { t: Track; best: Candidate | null; chosen: Candidate | null; loaded: boolean }) {
+function Verdict({
+  t,
+  best,
+  chosen,
+  loaded,
+  onRedownload,
+}: {
+  t: Track;
+  best: Candidate | null;
+  chosen: Candidate | null;
+  loaded: boolean;
+  onRedownload: () => void;
+}) {
   if (!loaded) return null;
+  if (t.file_missing) {
+    return (
+      <div className="verdict tone-warn">
+        <CircleAlert size={18} aria-hidden />
+        <div>
+          <b>文件已被移走或删除</b>
+          <span>原来保存在 {t.file?.path}。可以按选定的版本重新下载，也可以在下面换一个候选。</span>
+        </div>
+        {t.chosen_candidate_id != null && (
+          <div className="row gap-8 end">
+            <button className="btn btn-sm" onClick={onRedownload}>
+              <Download size={14} /> 重新下载
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
   if (chosen) {
     return (
       <div className="verdict tone-ok">
@@ -482,7 +617,10 @@ function Verdict({ t, best, chosen, loaded }: { t: Track; best: Candidate | null
           <b>
             已选定 #{chosen.rank} {chosen.provider_label} · {chosen.quality.label}
           </b>
-          <span>{t.chosen_by === "auto" ? "系统自动匹配，各项检查都通过" : "由你手动选定"}；下载时若失败，会自动改用其他匹配的候选。</span>
+          <span>
+            {t.chosen_by === "auto" ? "系统自动匹配，各项检查都通过" : "由你手动选定"}；
+            {t.status === "done" ? "已下载。选其他候选可以换版本，新版本下好前保留原文件。" : "下载时若失败，会自动改用其他来源的同一版本。"}
+          </span>
         </div>
       </div>
     );
@@ -503,8 +641,12 @@ function Verdict({ t, best, chosen, loaded }: { t: Track; best: Candidate | null
       <div className="verdict tone-bad">
         <Search size={18} aria-hidden />
         <div>
-          <b>没有找到可用的版本</b>
-          <span>可以修改歌名或歌手后重新搜索，或者跳过。</span>
+          <b>{t.search_failed ? "音源都没连上" : "没有找到可用的版本"}</b>
+          <span>
+            {t.search_failed
+              ? `不一定是没有这首歌：${t.error ?? "各音源都超时或报错"}。检查网络或代理后重新搜索。`
+              : "可以修改歌名或歌手后重新搜索，或者跳过。"}
+          </span>
         </div>
       </div>
     );
@@ -543,12 +685,18 @@ function CandRow({
   const delta = c.duration != null && t.duration != null ? c.duration - t.duration : null;
   const deltaTone = delta == null ? "idle" : Math.abs(delta) <= tolerance(t.duration!) ? "ok" : Math.abs(delta) <= 10 ? "warn" : "bad";
   return (
-    <tr ref={rowRef} data-flip={c.id} className={`cand v-${c.verdict}${chosen ? " is-chosen" : ""}${hl ? " is-hl" : ""}`} onMouseEnter={() => onHover(c.id)} onMouseLeave={() => onHover(null)}>
+    <tr
+      ref={rowRef}
+      data-flip={c.id}
+      className={`cand v-${c.verdict}${chosen ? " is-chosen" : ""}${hl ? " is-hl" : ""}`}
+      onMouseEnter={() => onHover(c.id)}
+      onMouseLeave={() => onHover(null)}
+    >
       <td className="num">
         <span className={`rank v-${c.verdict}`}>{c.rank}</span>
       </td>
       <td>
-        <PlayButton playable={{ key: `c:${c.id}`, url: c.preview_url, title: c.title, subtitle: c.needs_member ? `${c.provider_label}需会员 · 已换其他音源同版本试听` : `${c.artist} · ${c.provider_label} 试听`, lyricsUrl: api.candidateLyricsUrl(c.id), coverUrl: api.candidateCoverUrl(c.id) }} />
+        <PlayButton playable={candPlayable(c)} />
       </td>
       <td>
         <div className="song">
@@ -599,8 +747,12 @@ function CandRow({
             <Check size={14} /> 已选
           </span>
         ) : (
-          <button className={`btn btn-sm${c.verdict === "reject" ? "" : " btn-choose"}`} onClick={() => onChoose(c)} title={c.rank <= 9 ? `快捷键 ${c.rank}` : undefined}>
-            选这个
+          <button
+            className={`btn btn-sm${c.verdict === "reject" ? "" : " btn-choose"}`}
+            onClick={() => onChoose(c, !t.file)}
+            title={t.file ? "已下载过：新版本下载成功后替换，失败则保留原文件" : c.rank <= 9 ? `快捷键 ${c.rank}` : undefined}
+          >
+            {t.file ? "换成这个" : "选这个"}
           </button>
         )}
       </td>
@@ -608,7 +760,26 @@ function CandRow({
   );
 }
 
-function EditWant({ t, onSave, onCancel }: { t: Track; onSave: (p: { title: string; artist: string; duration: number | null }) => void; onCancel: () => void }) {
+function candPlayable(c: Candidate): Playable {
+  return {
+    key: `c:${c.id}`,
+    url: c.preview_url,
+    title: c.title,
+    subtitle: c.needs_member ? `${c.provider_label}需会员 · 已换其他音源同版本试听` : `${c.artist} · ${c.provider_label} 试听`,
+    lyricsUrl: api.candidateLyricsUrl(c.id),
+    coverUrl: api.candidateCoverUrl(c.id),
+  };
+}
+
+function EditWant({
+  t,
+  onSave,
+  onCancel,
+}: {
+  t: Track;
+  onSave: (p: { title: string; artist: string; duration: number | null }) => void;
+  onCancel: () => void;
+}) {
   const [title, setTitle] = useState(t.title);
   const [artist, setArtist] = useState(t.artist);
   const [dur, setDur] = useState(t.duration != null ? fmtDuration(t.duration) : "");
@@ -640,4 +811,3 @@ function EditWant({ t, onSave, onCancel }: { t: Track; onSave: (p: { title: stri
     </form>
   );
 }
-

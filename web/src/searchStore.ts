@@ -123,7 +123,12 @@ export const searchActions = {
   /** Fetch the enabled providers once, for the source switches. */
   async loadCatalog() {
     const all = await api.providers();
-    set({ catalog: all.filter((p) => p.enabled).sort((a, b) => a.order - b.order).map(({ id, label }) => ({ id, label })) });
+    set({
+      catalog: all
+        .filter((p) => p.enabled)
+        .sort((a, b) => a.order - b.order)
+        .map(({ id, label }) => ({ id, label })),
+    });
   },
   /** Flip one source on or off for single search; refuses to switch off the last one. */
   toggleSource(id: string): boolean {
@@ -196,7 +201,12 @@ async function run() {
     } else if (event.type === "progress" || event.type === "source") {
       const known = state.sources.some((s) => s.id === event.provider);
       const skipped = event.type === "source" && event.skipped;
-      const next: SourceState = { id: event.provider, label: event.label, state: skipped ? "skipped" : event.ok ? "ok" : "error", error: event.error };
+      const next: SourceState = {
+        id: event.provider,
+        label: event.label,
+        state: skipped ? "skipped" : event.ok ? "ok" : "error",
+        error: event.error,
+      };
       const sources = known ? state.sources.map((s) => (s.id === event.provider ? next : s)) : [...state.sources, next];
       set(event.type === "progress" ? { cands: event.candidates, sources } : { sources });
     } else if (event.type === "done") {

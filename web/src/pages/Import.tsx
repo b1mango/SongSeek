@@ -4,7 +4,7 @@ import { api, type ParseInput } from "../api";
 import { useToast } from "../components";
 import { fmtDuration } from "../format";
 import { navigate } from "../router";
-import { upsertPlaylist } from "../store";
+import { upsertJob, upsertPlaylist } from "../store";
 import type { ColumnKey, ParseResult } from "../types";
 
 type Mode = "file" | "text" | "url";
@@ -58,8 +58,9 @@ export function ImportPage() {
     try {
       const p = await api.createPlaylist(name.trim() || result.name, result.source, rows);
       upsertPlaylist(p);
-      if (startSearch) await api.searchPlaylist(p.id);
+      // Leave the import page first: if starting the search fails, retrying here would create a second copy.
       navigate({ page: "playlist", id: p.id });
+      if (startSearch) upsertJob(await api.searchPlaylist(p.id));
     } catch (e) {
       toast("bad", (e as Error).message);
     } finally {
@@ -263,7 +264,11 @@ export function ImportPage() {
                 ))}
               </tbody>
             </table>
-            {result.rows.length > PREVIEW_LIMIT && <div className="table-more muted small">仅预览前 {PREVIEW_LIMIT} 行，共 {result.rows.length} 行，全部会被导入。</div>}
+            {result.rows.length > PREVIEW_LIMIT && (
+              <div className="table-more muted small">
+                仅预览前 {PREVIEW_LIMIT} 行，共 {result.rows.length} 行，全部会被导入。
+              </div>
+            )}
           </div>
         </section>
       )}

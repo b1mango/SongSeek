@@ -89,7 +89,16 @@ def test_same_recording_uses_chosen_duration(changes, allowed):
     target = track(duration=None)
     chosen = evaluate(target, candidate(), "演示")
     other = evaluate(target, candidate(**changes), "演示")
-    assert same_recording(target, chosen, other) == allowed
+    assert same_recording(chosen, other) == allowed
+
+
+def test_same_recording_follows_selected_artist_and_version():
+    target = track()
+    chosen = evaluate(target, candidate(title="晴天 (Live)", artist="另一歌手", duration=200), "演示")
+    alternate = evaluate(target, candidate(title="晴天 现场版", artist="另一歌手", duration=202), "其他")
+    original = evaluate(target, candidate(), "演示")
+    assert same_recording(chosen, alternate)
+    assert not same_recording(chosen, original)
 
 
 @pytest.mark.parametrize("artist, duration", [("", 180), ("周杰伦", None), ("", None)])

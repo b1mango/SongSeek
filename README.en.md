@@ -25,6 +25,8 @@
 - Batch download with duration and full-decode checks, tags and album art written, identical files deduplicated
 - A downloading song's whole row turns into a purple dot-matrix progress field, with live percent or bytes downloaded
 - One-click status filters (not found, failed, … each with its own colour); the filter and search bar stays pinned while scrolling, and a bulk-action bar floats up when songs are selected
+- Append songs to an existing playlist with duplicate detection; distinguish source connection failures from songs not found
+- Redownload moved or deleted files from the selected candidate, and recover eligible published audio records after an interruption
 - Per-song LRC lyrics switch; fetch lyrics for already-downloaded songs in one click
 - Single-song search with an artist mode, a full-screen player, and CSV export of results
 - Light and dark themes, or follow the system, switched from the sidebar
@@ -89,10 +91,10 @@ Plain text is read as `title - artist` by default. `artist - title` cannot be de
 <details>
 <summary>Matching, downloads and networking</summary>
 
-- **Match scores**: match 90–99, review 50–89, reject 0–49. Among matches, ties are broken by lossless / bitrate, then popularity, then source order. Fallback after a failure only uses other match candidates.
+- **Match scores**: match 90–99, review 50–89, reject 0–49. Among matches, ties are broken by lossless / bitrate, then popularity, then source order. Download fallback is restricted to the same recording as the selected version.
 - **Downloads**: audio from video sources is remuxed with `-c:a copy`, then checked for duration and a full decode. If the target file has the same SHA256 it is reused; different content gets a numbered name.
 - **Jobs**: search and download share one concurrency limit, with at most two concurrent requests per source. Cancelling keeps finished songs, and interrupted songs are recovered on restart. Download progress is pushed over the SSE `track_progress` event, at most 5 times per second per song.
-- **Launch and quit**: the window opens first and the local service starts behind it, so macOS always hands the app focus. Closing the window ends the process and its child processes at once; database writes are atomic and unfinished songs are reset to retryable on the next launch.
+- **Launch and quit**: the window opens first and the local service starts behind it to reduce macOS activation problems. Closing the window ends the process and its child processes. Interrupted songs can be retried on the next launch; audio published before its record was saved is recovered when the recorded destination and file hash can be verified.
 - **Proxy**: three modes, Auto / Manual / Off, with Auto detecting environment and system proxies. Only YouTube and the LRCLIB fallback go through the proxy. PAC is not supported.
 - **NetEase**: without a cookie only free full-length audio is tried; VIP or preview URLs are rejected explicitly. The cookie is stored in a local file with 0600 permissions, sent only to the NetEase API, and never returned by the API.
 - **Security**: intended for a single local user. Uploads are capped at 20 MB and XLSX decompression at 100 MB; CSV export neutralises formula prefixes.

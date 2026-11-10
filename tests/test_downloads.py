@@ -8,7 +8,7 @@ import pytest
 
 from songseek.downloader import digest, publish, safe_name, tag, transfer, verify
 from songseek.errors import SongSeekError
-from songseek.models import AudioSource, DownloadedFile, ParsedRow
+from songseek.models import AudioSource, DownloadedFile, ParsedRow, ProviderInfo
 
 
 def searched(service, duration=180):
@@ -29,11 +29,12 @@ def test_selected_failure_falls_back_to_same_recording(service, monkeypatch, dur
     alternate.provider = "other"
     alternate.source_id = "alternate"
     service.providers["other"] = service.providers["mock"]
+    service.config.providers.append(ProviderInfo(id="other", label="其他音源", max_quality="192k", order=1))
     raw = service.db.raw_candidate(matches[0].id) | {"provider": "other", "source_id": "alternate"}
     import json
     alternate.id = service.db.insert("candidates", alternate.model_dump(), track_id=track.id, provider="other", source_id="alternate", raw=json.dumps(raw))
     calls = []
-    def download(target, raw, provider, playlist_name, on_progress=None):
+    def download(target, raw, provider, playlist_name, on_progress=None, **kwargs):
         calls.append(raw.source_id)
         if len(calls) == 1:
             raise SongSeekError("取流失败")
@@ -49,7 +50,7 @@ def test_selected_failure_falls_back_to_same_recording(service, monkeypatch, dur
 def test_never_falls_back_to_unrelated_review(service, monkeypatch):
     track, candidates = searched(service)
     calls = []
-    def fail(target, raw, provider, playlist_name, on_progress=None):
+    def fail(target, raw, provider, playlist_name, on_progress=None, **kwargs):
         calls.append(raw.source_id)
         raise SongSeekError("取流失败")
     monkeypatch.setattr(service.downloader, "download", fail)
@@ -133,6 +134,7 @@ def test_atomic_publish_duplicates_and_different_bytes(tmp_path, monkeypatch):
     second = publish(partial, target)
     assert second.name == "song (2).mp3" and len(calls) == 1
     partial.write_bytes(b"different")
+    # 同一份音频已在目录里：直接复用，不再多出 (3)
     assert publish(partial, target) == second
     assert len(calls) == 1
     assert digest(second) != digest(target)
@@ -291,7 +293,7 @@ def test_track_progress_payload_and_throttle(service, monkeypatch, total):
     listener = service.events.subscribe()
     clock = [0.0]
     monkeypatch.setattr("songseek.service.time.monotonic", lambda: clock[0])
-    def download(track, raw, provider, playlist_name, on_progress):
+    def download(track, raw, provider, playlist_name, on_progress, **kwargs):
         for timestamp, downloaded in [(0, 1000), (.1, 1500), (.25, 2000), (.26, 3000)]:
             clock[0] = timestamp
             on_progress("download", downloaded, total)
@@ -312,7 +314,8 @@ def test_track_progress_payload_and_throttle(service, monkeypatch, total):
     expected.append({"track_id": target.id, "playlist_id": target.playlist_id, "phase": "finishing",
                      "downloaded": 3000, "total": total, "fraction": 1 if total else None})
     assert progress == expected
-    assert [data["status"] for kind, data in events if kind == "track"] == ["downloading", "done"]
+    # 音频完成先入库，歌词收尾再保存一次 Track。
+    assert [data["status"] for kind, data in events if kind == "track"] == ["downloading", "done", "done"]
     assert next(i for i, event in enumerate(events) if event == ("track_progress", expected[-1])) < next(
         i for i, (kind, data) in enumerate(events) if kind == "track" and data["status"] == "done")
 
@@ -367,3 +370,302 @@ def test_track_carries_snapshot_of_chosen_candidate(service):
     assert service.track(track.id).chosen == chosen.chosen
     service.delete_track(track.id)
     assert service.db.list("candidates", "track_id", track.id) == []
+
+
+def test_selected_live_failure_never_falls_back_to_original_match(service, monkeypatch):
+    target, candidates = searched(service)
+    live = next(c for c in candidates if c.flags == ["live"])
+    service.choose(target.id, live.id)
+    calls = []
+    def fail(track, raw, *args, **kwargs):
+        calls.append(raw.source_id)
+        raise SongSeekError("取流失败，请稍后重试")
+    monkeypatch.setattr(service.downloader, "download", fail)
+    result = service.download_track(target.id)
+    assert result.status == "failed" and result.chosen_candidate_id == live.id
+    assert calls == [live.source_id]
+
+
+def test_switch_version_failure_restores_original_file_and_selection(service, tmp_path, monkeypatch):
+    target, candidates = searched(service)
+    old_path = tmp_path / "original.mp3"
+    old_path.write_bytes(b"original")
+    target.status = "done"
+    target.file = DownloadedFile(path=str(old_path), size=8, format="mp3", bitrate=192, duration=180, sha256="old")
+    original = service.save_track(target).model_copy(deep=True)
+    live = next(c for c in candidates if c.flags == ["live"])
+    changed = service.choose(target.id, live.id)
+    assert changed.status == "matched" and changed.file.path == str(old_path)
+    def fail(*args, **kwargs):
+        assert old_path.read_bytes() == b"original"
+        raise SongSeekError("取流失败，请稍后重试")
+    monkeypatch.setattr(service.downloader, "download", fail)
+    result = service.download_track(target.id)
+    assert result.status == "done" and result.file.path == original.file.path
+    assert (result.chosen_candidate_id, result.chosen_by) == (original.chosen_candidate_id, original.chosen_by)
+    assert result.error.startswith("换版本下载失败，已保留原文件：")
+    assert old_path.read_bytes() == b"original"
+
+
+def test_switch_version_success_replaces_record_only_after_publish(service, tmp_path, monkeypatch):
+    target, candidates = searched(service)
+    old = tmp_path / "original.mp3"
+    old.write_bytes(b"original")
+    target.status = "done"
+    target.file = DownloadedFile(path=str(old), size=8, format="mp3", bitrate=192, duration=180, sha256="old")
+    service.save_track(target)
+    live = next(c for c in candidates if c.flags == ["live"])
+    service.choose(target.id, live.id)
+    service.config.settings.lyrics = False
+    def download(track, *args, **kwargs):
+        assert service.track(track.id).file.path == str(old)
+        return DownloadedFile(path=str(tmp_path / "new.mp3"), size=3, format="mp3", bitrate=128, duration=180, sha256="new")
+    monkeypatch.setattr(service.downloader, "download", download)
+    result = service.download_track(target.id)
+    assert result.status == "done" and result.chosen_candidate_id == live.id
+    assert result.file.path.endswith("new.mp3") and old.read_bytes() == b"original"
+
+
+def test_publish_reserves_stem_across_extensions_lyrics_and_identical_bytes(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    (tmp_path / "song.lrc").write_text("existing lyrics")
+    partials = [tmp_path / f"part-{i}.part" for i in range(3)]
+    for path in partials:
+        path.write_bytes(b"same audio")
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [pool.submit(publish, path, tmp_path / f"song.{ext}") for path, ext in zip(partials, ["mp3", "flac", "mp3"])]
+        published = [future.result() for future in futures]
+    # the .lrc's stem stays taken; the two identical mp3s collapse into one file; the flac gets its own stem
+    assert all(path.stem != "song" and path.read_bytes() == b"same audio" for path in published)
+    assert published[0] == published[2] and published[1].stem != published[0].stem
+    assert (tmp_path / "song.lrc").read_text() == "existing lyrics"
+
+
+@pytest.mark.parametrize("failure", ["permission", "full", "not_directory", "publish"])
+def test_local_storage_failures_stop_fallback_with_actionable_error(service, tmp_path, monkeypatch, failure):
+    import errno
+    import songseek.downloader as module
+    target, candidates = searched(service)
+    first = next(c for c in candidates if c.verdict == "match")
+    alternate = first.model_copy(update={"id": 0, "source_id": "alternate"})
+    raw = service.db.raw_candidate(first.id) | {"source_id": "alternate"}
+    service.db.insert("candidates", alternate.model_dump(), track_id=target.id, provider="mock", source_id="alternate", raw=json.dumps(raw))
+    calls = []
+    monkeypatch.setattr(service.providers["mock"], "resolve", lambda raw: calls.append(raw.source_id) or AudioSource("mock"))
+    if failure == "not_directory":
+        output = tmp_path / "not-directory"
+        output.write_text("file")
+        service.config.settings.output_dir = str(output)
+    elif failure == "permission":
+        original = module.os.open
+        def open_file(path, *args):
+            if str(path).endswith(".part"):
+                raise PermissionError(errno.EACCES, "private details")
+            return original(path, *args)
+        monkeypatch.setattr(module.os, "open", open_file)
+    elif failure == "full":
+        def transfer(*args, **kwargs):
+            raise OSError(errno.ENOSPC, "private disk details")
+        monkeypatch.setattr(module, "transfer", transfer)
+    else:
+        monkeypatch.setattr(module, "transfer", lambda source, path, *args, **kwargs: path.write_bytes(b"audio"))
+        monkeypatch.setattr(module, "verify", lambda *args: {"format": "mp3", "bitrate": 128, "duration": 180})
+        monkeypatch.setattr(module, "tag", lambda *args: None)
+        def publish(*args, **kwargs):
+            raise OSError(errno.EROFS, "private details")
+        monkeypatch.setattr(module, "publish", publish)
+    with pytest.raises(SongSeekError) as error:
+        service.downloader.download(target, service.raw_candidate(first.id), service.providers["mock"], "测试")
+    assert error.value.code == "storage_error" and "输出目录" in str(error.value)
+    calls.clear()
+    result = service.download_track(target.id)
+    assert result.status == "failed" and "输出目录" in result.error
+    assert "private" not in result.error and len(calls) <= 1
+    assert not list(tmp_path.rglob(".songseek-*.part"))
+
+
+def test_published_audio_is_saved_before_lyrics_and_lyrics_failure_keeps_done(service, monkeypatch):
+    target, _ = searched(service)
+    file = DownloadedFile(path="/tmp/new.mp3", size=3, format="mp3", bitrate=128, duration=180, sha256="audio")
+    monkeypatch.setattr(service.downloader, "download", lambda *args, **kwargs: file)
+    def fail(track):
+        saved = service.track(track.id)
+        assert saved.status == "done" and saved.file.path == file.path
+        raise RuntimeError("private details")
+    monkeypatch.setattr(service.lyrics, "save", fail)
+    result = service.download_track(target.id)
+    assert result.status == "done" and result.error is None
+    assert result.file.lyrics.error and "private" not in result.file.lyrics.error
+
+
+@pytest.mark.parametrize("restricted", ["disabled", "scope"])
+def test_download_fallback_respects_enabled_and_requested_sources(service, monkeypatch, restricted):
+    target, candidates = searched(service)
+    first = next(c for c in candidates if c.verdict == "match")
+    alternate = first.model_copy(update={"id": 0, "provider": "other", "source_id": "alternate"})
+    raw = service.db.raw_candidate(first.id) | {"provider": "other", "source_id": "alternate"}
+    service.db.insert("candidates", alternate.model_dump(), track_id=target.id, provider="other", source_id="alternate", raw=json.dumps(raw))
+    service.providers["other"] = service.providers["mock"]
+    service.config.providers.append(ProviderInfo(id="other", label="其他", max_quality="320k", order=1, enabled=restricted != "disabled"))
+    target.providers = None
+    service.save_track(target)
+    calls = []
+    def fail(track, raw, *args, **kwargs):
+        calls.append(raw.provider)
+        raise SongSeekError("取流失败，请稍后重试")
+    monkeypatch.setattr(service.downloader, "download", fail)
+    result = service.download_track(target.id, providers=["mock"] if restricted == "scope" else None)
+    assert result.status == "failed" and calls == ["mock"]
+    assert any(c.provider == "other" for c in service.candidates(target.id))
+
+
+def test_remux_disk_full_is_storage_error(tmp_path, monkeypatch):
+    from songseek.downloader import remux
+    path = tmp_path / ".songseek-a.part"
+    path.write_bytes(b"audio")
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, stderr=b"No space left on device"))
+    with pytest.raises(SongSeekError) as error:
+        remux(path, "m4a")
+    assert error.value.code == "storage_error" and "清理磁盘空间" in str(error.value)
+    assert path.read_bytes() == b"audio"
+
+
+def test_tag_wrapped_disk_error_is_storage_error(tone, service, monkeypatch):
+    import errno
+    from mutagen import MutagenError
+    track, candidates = searched(service)
+    audio = mutagen.File(tone)
+    def save():
+        raise MutagenError(OSError(errno.ENOSPC, "private details"))
+    monkeypatch.setattr(audio, "save", save)
+    monkeypatch.setattr(mutagen, "File", lambda *args: audio)
+    with pytest.raises(SongSeekError) as error:
+        tag(tone, track, service.raw_candidate(candidates[0].id))
+    assert error.value.code == "storage_error" and "清理磁盘空间" in str(error.value)
+
+
+def test_download_rechecks_sources_disabled_mid_attempt(service, monkeypatch):
+    target, candidates = searched(service)
+    chosen = next(c for c in candidates if c.verdict == "match")
+    alternate = chosen.model_copy(update={"id": 0, "source_id": "alternate"})
+    raw = service.db.raw_candidate(chosen.id) | {"source_id": "alternate"}
+    service.db.insert("candidates", alternate.model_dump(), track_id=target.id, provider="mock", source_id="alternate", raw=json.dumps(raw))
+    calls = []
+    def fail(track, raw, *args, **kwargs):
+        calls.append(raw.source_id)
+        service.config.providers[0].enabled = False
+        raise SongSeekError("取流失败，请启用音源后重试")
+    monkeypatch.setattr(service.downloader, "download", fail)
+    assert service.download_track(target.id).status == "failed"
+    assert calls == [chosen.source_id]
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+def test_startup_recovers_published_audio_without_database_record(service, grouped):
+    target, candidates = searched(service)
+    service.config.settings.group_by_playlist = grouped
+    chosen = next(c for c in candidates if c.verdict == "match")
+    published = service.downloader.download(target, service.raw_candidate(chosen.id), service.providers["mock"], "测试",
+        on_publish=lambda path, sha: service.db.prepare_publication(target.id, chosen.id, str(path.resolve()), sha))
+    # Simulate a hard stop after publish(), before download_track() can save the DownloadedFile.
+    target = service.track(target.id)
+    target.status, target.file = "downloading", None
+    service.db.save("tracks", target.model_dump(exclude={"file_missing"}))
+    service._recover()
+    recovered = service.track(target.id)
+    assert recovered.status == "done" and recovered.error is None
+    assert recovered.file.path == published.path and Path(recovered.file.path).is_file()
+    assert recovered.file.candidate_id == chosen.id and recovered.file.chosen_by == "auto"
+    assert recovered.file.duration == 180 and recovered.file.sha256 == published.sha256
+
+
+def test_startup_recovers_same_recording_fallback_candidate(service):
+    target, candidates = searched(service)
+    chosen = next(c for c in candidates if c.verdict == "match")
+    alternate = chosen.model_copy(update={"id": 0, "source_id": "alternate"})
+    raw = service.db.raw_candidate(chosen.id) | {"source_id": "alternate"}
+    alternate.id = service.db.insert("candidates", alternate.model_dump(), track_id=target.id, provider="mock", source_id="alternate", raw=json.dumps(raw))
+    published = service.downloader.download(target, service.raw_candidate(alternate.id), service.providers["mock"], "测试",
+        on_publish=lambda path, sha: service.db.prepare_publication(target.id, alternate.id, str(path.resolve()), sha))
+    target = service.track(target.id)
+    target.status, target.file = "downloading", None
+    service.db.save("tracks", target.model_dump(exclude={"file_missing"}))
+    service._recover()
+    recovered = service.track(target.id)
+    assert recovered.status == "done" and recovered.file.path == published.path
+    assert recovered.chosen_candidate_id == alternate.id and recovered.chosen_by == "auto"
+    assert recovered.file.candidate_id == alternate.id
+
+
+def test_startup_recovers_exact_chosen_candidate_without_artist(service):
+    target, candidates = searched(service)
+    chosen = next(c for c in candidates if c.verdict == "match")
+    chosen.artist = ""
+    service.db.save("candidates", chosen.model_dump())
+    published = service.downloader.download(target, service.raw_candidate(chosen.id), service.providers["mock"], "测试",
+        on_publish=lambda path, sha: service.db.prepare_publication(target.id, chosen.id, str(path.resolve()), sha))
+    target.status, target.file = "downloading", None
+    service.db.save("tracks", target.model_dump(exclude={"file_missing"}))
+    service._recover()
+    recovered = service.track(target.id)
+    assert recovered.status == "done" and recovered.file.path == published.path
+    assert recovered.chosen_candidate_id == chosen.id
+
+
+def test_startup_does_not_claim_untagged_same_name_file(service):
+    target, _ = searched(service)
+    path = Path(service.config.settings.output_dir) / "周杰伦 - 晴天.mp3"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"an unrelated user file")
+    target.status, target.file = "downloading", None
+    service.db.save("tracks", target.model_dump(exclude={"file_missing"}))
+    service._recover()
+    recovered = service.track(target.id)
+    assert recovered.status == "matched" and recovered.file is None
+    assert recovered.error == "上次运行中断，可重新执行"
+    assert path.read_bytes() == b"an unrelated user file"
+
+
+def test_startup_does_not_claim_other_playlists_recording(service):
+    target, candidates = searched(service)
+    chosen = next(c for c in candidates if c.verdict == "match")
+    old = service.downloader.download(target, service.raw_candidate(chosen.id), service.providers["mock"], "另一份清单")
+    target.status, target.file = "downloading", None  # stopped before this attempt published anything
+    service.db.save("tracks", target.model_dump(exclude={"file_missing"}))
+    service._recover()
+    recovered = service.track(target.id)
+    assert recovered.status == "matched" and recovered.file is None
+    assert Path(old.path).is_file()
+
+
+def test_startup_recovers_published_replacement_instead_of_old_file(service, tmp_path):
+    target, candidates = searched(service)
+    old_path = tmp_path / "old.mp3"
+    old_path.write_bytes(b"old recording")
+    target.status = "done"
+    target.file = DownloadedFile(path=str(old_path), size=old_path.stat().st_size, format="mp3", bitrate=128,
+                                 duration=180, sha256="old", candidate_id=target.chosen_candidate_id, chosen_by=target.chosen_by)
+    service.save_track(target)
+    replacement = next(c for c in candidates if c.flags == ["live"])
+    target = service.choose(target.id, replacement.id)
+    published = service.downloader.download(target, service.raw_candidate(replacement.id), service.providers["mock"], "测试",
+        on_publish=lambda path, sha: service.db.prepare_publication(target.id, replacement.id, str(path.resolve()), sha))
+    target.status = "downloading"
+    service.db.save("tracks", target.model_dump(exclude={"file_missing"}))
+    service._recover()
+    recovered = service.track(target.id)
+    assert recovered.status == "done" and recovered.file.path == published.path
+    assert recovered.chosen_candidate_id == replacement.id and recovered.chosen_by == "user"
+    assert old_path.read_bytes() == b"old recording"
+
+
+def test_startup_rejects_published_file_changed_after_prepare(service):
+    target, candidates = searched(service)
+    chosen = next(c for c in candidates if c.verdict == "match")
+    published = service.downloader.download(target, service.raw_candidate(chosen.id), service.providers["mock"], "测试",
+        on_publish=lambda path, sha: service.db.prepare_publication(target.id, chosen.id, str(path.resolve()), sha))
+    Path(published.path).write_bytes(b"file was replaced")
+    target.status, target.file = "downloading", None
+    service.db.save("tracks", target.model_dump(exclude={"file_missing"}))
+    service._recover()
+    assert service.track(target.id).status == "matched" and service.track(target.id).file is None

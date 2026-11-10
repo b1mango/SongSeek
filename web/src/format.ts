@@ -40,15 +40,7 @@ export const STATUS: Record<TrackStatus, { label: string; tone: Tone }> = {
 };
 
 /** Order used for the status strip and filters: what needs attention first. */
-export const STATUS_ORDER: TrackStatus[] = [
-  "needs_review",
-  "not_found",
-  "failed",
-  "matched",
-  "done",
-  "pending",
-  "skipped",
-];
+export const STATUS_ORDER: TrackStatus[] = ["needs_review", "not_found", "failed", "matched", "done", "pending", "skipped"];
 
 export const FLAG_LABEL: Record<VersionFlag, string> = {
   live: "Live",

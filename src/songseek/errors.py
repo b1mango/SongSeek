@@ -1,3 +1,4 @@
+import errno
 import logging
 
 import httpx
@@ -10,6 +11,18 @@ class SongSeekError(Exception):
         super().__init__(message)
         self.code = code
         self.status = status
+
+
+def storage_error(error: OSError) -> SongSeekError:
+    if error.errno in (errno.ENOSPC, errno.EDQUOT):
+        message = "保存空间不足，请清理磁盘空间或在设置中更换输出目录后重试"
+    elif error.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+        message = "输出目录无法写入，请在设置中更换有写入权限的输出目录后重试"
+    elif error.errno in (errno.ENOTDIR, errno.EISDIR, errno.EEXIST):
+        message = "输出路径不是可用目录，请在设置中更换输出目录后重试"
+    else:
+        message = "本地文件保存失败，请检查磁盘空间或在设置中更换输出目录后重试"
+    return SongSeekError(message, "storage_error")
 
 
 def public_error(error: Exception) -> str:

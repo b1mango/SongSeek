@@ -15,6 +15,16 @@ export interface Playlist {
   counts: Record<TrackStatus, number> & { total: number };
 }
 
+/** SSE deletion events identify records permanently removed from the database. */
+export interface TrackDeleted {
+  id: number;
+  playlist_id: number;
+}
+
+export interface PlaylistDeleted {
+  id: number;
+}
+
 export interface DownloadedFile {
   path: string;
   size: number;
@@ -35,6 +45,8 @@ export interface LyricsInfo {
   translated: boolean;
   embedded: boolean;
   error: string | null;
+  /** A forced refresh failed; the lyrics above are the previous, still valid ones. */
+  refresh_error?: string | null;
 }
 
 export interface ChosenCandidate {
@@ -67,6 +79,10 @@ export interface Track {
   best_score: number | null;
   candidate_count: number;
   file: DownloadedFile | null;
+  /** Marked done, but the file is no longer where it was saved (moved or deleted outside the app). */
+  file_missing?: boolean;
+  /** not_found because every source failed (offline, timeouts), not because nothing matched. */
+  search_failed?: boolean;
   error: string | null;
   note: string;
   updated_at: string;
@@ -176,7 +192,7 @@ export interface ParseResult {
   warnings: string[];
 }
 
-export type BatchAction = "accept_best" | "skip" | "unskip" | "retry";
+export type BatchAction = "accept_best" | "skip" | "unskip" | "retry" | "redownload";
 
 /** One song in an artist's popular list; the token addresses it until the server forgets it (~2h). */
 export interface ArtistSong {

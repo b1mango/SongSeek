@@ -7,7 +7,7 @@ import { useFlipList } from "../motion";
 import { PlayButton } from "../player";
 import { href, navigate } from "../router";
 import { searchActions, useSearch, type SearchState } from "../searchStore";
-import { upsertJob } from "../store";
+import { onEvent, upsertJob } from "../store";
 import type { ArtistSong, Candidate, LyricsInfo, Track } from "../types";
 
 const hasLyrics = (info: LyricsInfo | null | undefined) => !!info && !info.error && !!(info.path || info.embedded);
@@ -22,6 +22,7 @@ export function SearchPage() {
     if (track && ["queued", "downloading"].includes(track.status)) searchActions.refreshTrack().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => onEvent("resync", () => void searchActions.refreshTrack().catch(() => {})), []);
 
   useEffect(() => {
     if (!error) return;
@@ -36,7 +37,9 @@ export function SearchPage() {
       <header className="page-head">
         <div>
           <h1>单曲搜索</h1>
-          <p className="muted">输入「歌名 歌手」找一首歌，只输歌手名会列出 TA 的热门歌曲。点下方音源可以临时开关，下载过的歌记录在「单曲搜索」清单里。</p>
+          <p className="muted">
+            输入「歌名 歌手」找一首歌，只输歌手名会列出 TA 的热门歌曲。点下方音源可以临时开关，下载过的歌记录在「单曲搜索」清单里。
+          </p>
         </div>
       </header>
 
@@ -48,8 +51,21 @@ export function SearchPage() {
         }}
       >
         <Search size={20} aria-hidden />
-        <input className="input bare grow" placeholder="例如：晴天 周杰伦，或者只输 周杰伦" value={query} onChange={(e) => searchActions.setQuery(e.target.value)} autoFocus />
-        <input className="input bare mono w-90" placeholder="时长 可选" value={dur} onChange={(e) => searchActions.setDur(e.target.value)} aria-label="时长（可选）" title="填了时长会更准，例如 4:29" />
+        <input
+          className="input bare grow"
+          placeholder="例如：晴天 周杰伦，或者只输 周杰伦"
+          value={query}
+          onChange={(e) => searchActions.setQuery(e.target.value)}
+          autoFocus
+        />
+        <input
+          className="input bare mono w-90"
+          placeholder="时长 可选"
+          value={dur}
+          onChange={(e) => searchActions.setDur(e.target.value)}
+          aria-label="时长（可选）"
+          title="填了时长会更准，例如 4:29"
+        />
         <button className="btn btn-primary" disabled={!query.trim()}>
           {loading ? <LoaderCircle className="spin" size={16} /> : null} 搜索
         </button>
@@ -101,7 +117,15 @@ function SourceSwitches({ s }: { s: SearchState }) {
             type="button"
             className={`source-pill ${cls}`}
             aria-pressed={!isOff}
-            title={isOff ? `${p.label}：已关闭，点击启用` : st?.state === "skipped" ? `${p.label}：歌手模式用不到这个音源（点击关闭）` : st?.error ? `${st.error}（点击关闭这个音源）` : `${p.label}：已启用，点击关闭`}
+            title={
+              isOff
+                ? `${p.label}：已关闭，点击启用`
+                : st?.state === "skipped"
+                  ? `${p.label}：歌手模式用不到这个音源（点击关闭）`
+                  : st?.error
+                    ? `${st.error}（点击关闭这个音源）`
+                    : `${p.label}：已启用，点击关闭`
+            }
             onClick={() => {
               if (!searchActions.toggleSource(p.id)) toast("info", "至少保留一个音源");
             }}
@@ -141,6 +165,7 @@ function SongView({ s }: { s: SearchState }) {
 
   async function download(c: Candidate) {
     if (!track) return;
+    if (track.file_missing && c.id === track.chosen_candidate_id) return redownload();
     try {
       setTrack(await api.choose(track.id, c.id));
       upsertJob(await api.downloadPlaylist(track.playlist_id, [track.id], lrc[c.id] ?? lyricsDefault));
@@ -156,7 +181,8 @@ function SongView({ s }: { s: SearchState }) {
       const next = await api.trackLyrics(track.id, true);
       setTrack(next);
       const info = next.file?.lyrics;
-      if (hasLyrics(info)) toast("ok", `已保存歌词（${info!.source_label ?? "歌词"}）`);
+      if (info?.refresh_error) toast("info", `没更新成功，沿用原来的歌词：${info.refresh_error}`);
+      else if (hasLyrics(info)) toast("ok", `已保存歌词（${info!.source_label ?? "歌词"}）`);
       else toast("info", info?.error ?? "没有找到这首歌的歌词");
     } catch (e) {
       toast("bad", (e as Error).message);
@@ -184,7 +210,7 @@ function SongView({ s }: { s: SearchState }) {
 
   const lrcFor = (c: Candidate) => {
     const chosen = track && c.id === track.chosen_candidate_id;
-    if (chosen && track.file) {
+    if (chosen && track.file && !track.file_missing) {
       const on = hasLyrics(track.file.lyrics);
       return (
         <LrcSwitch
@@ -201,13 +227,43 @@ function SongView({ s }: { s: SearchState }) {
     }
     const on = lrc[c.id] ?? lyricsDefault;
     return (
-      <LrcSwitch on={on} onToggle={() => searchActions.setLrc(String(c.id), !on)} title={on ? "下载时一起保存 .lrc 歌词（点击取消）" : "只下载音频（点击同时保存歌词）"} />
+      <LrcSwitch
+        on={on}
+        onToggle={() => searchActions.setLrc(String(c.id), !on)}
+        title={on ? "下载时一起保存 .lrc 歌词（点击取消）" : "只下载音频（点击同时保存歌词）"}
+      />
     );
   };
 
+  async function redownload() {
+    if (!track) return;
+    try {
+      const { updated, skipped = [] } = await api.batch([track.id], "redownload");
+      if (updated[0]) setTrack(updated[0]);
+      toast("info", skipped.length ? skipped[0].reason : "正在按原来的版本重新下载");
+    } catch (e) {
+      toast("bad", (e as Error).message);
+    }
+  }
+
   return (
     <section className="stack gap-12">
-      {track?.file ? (
+      {track?.file_missing ? (
+        <div className="verdict tone-warn fade-in">
+          <CircleAlert size={18} aria-hidden />
+          <div>
+            <b>文件已被移走或删除</b>
+            <span>原来保存在 {track.file?.path}。可以按原来的版本重新下载，或在下面换一个。</span>
+          </div>
+          {track.chosen_candidate_id != null && (
+            <div className="row gap-8 end">
+              <button className="btn btn-sm" onClick={redownload}>
+                <Download size={14} /> 重新下载
+              </button>
+            </div>
+          )}
+        </div>
+      ) : track?.file ? (
         <div className="verdict tone-ok fade-in">
           <Download size={18} aria-hidden />
           <div>
@@ -220,7 +276,16 @@ function SongView({ s }: { s: SearchState }) {
             </span>
           </div>
           <div className="row gap-8 end">
-            <PlayButton playable={{ key: `t:${track.id}`, url: api.audioUrl(track.id), title: track.title, subtitle: `${track.artist} · 已下载`, lyricsUrl: api.trackLyricsUrl(track.id), coverUrl: api.trackCoverUrl(track.id) }} />
+            <PlayButton
+              playable={{
+                key: `t:${track.id}`,
+                url: api.audioUrl(track.id),
+                title: track.title,
+                subtitle: `${track.artist} · 已下载`,
+                lyricsUrl: api.trackLyricsUrl(track.id),
+                coverUrl: api.trackCoverUrl(track.id),
+              }}
+            />
             {!chosenShown && !hasLyrics(track.file.lyrics) && (
               <button className="btn btn-sm" disabled={lyricsBusy} onClick={fillLyrics} title="重新查找并保存这首歌的歌词">
                 {lyricsBusy ? <LoaderCircle className="spin" size={14} /> : <ScrollText size={14} />} 补歌词
@@ -265,7 +330,16 @@ function SongView({ s }: { s: SearchState }) {
             {shown.map((c) => (
               <tr key={c.id} data-flip={c.id} className={`cand v-${c.verdict}${track && c.id === track.chosen_candidate_id ? " is-chosen" : ""}`}>
                 <td>
-                  <PlayButton playable={{ key: `c:${c.id}`, url: c.preview_url, title: c.title, subtitle: c.needs_member ? `${c.provider_label}需会员 · 已换其他音源同版本试听` : `${c.artist} · ${c.provider_label} 试听`, lyricsUrl: api.candidateLyricsUrl(c.id), coverUrl: api.candidateCoverUrl(c.id) }} />
+                  <PlayButton
+                    playable={{
+                      key: `c:${c.id}`,
+                      url: c.preview_url,
+                      title: c.title,
+                      subtitle: c.needs_member ? `${c.provider_label}需会员 · 已换其他音源同版本试听` : `${c.artist} · ${c.provider_label} 试听`,
+                      lyricsUrl: api.candidateLyricsUrl(c.id),
+                      coverUrl: api.candidateCoverUrl(c.id),
+                    }}
+                  />
                 </td>
                 <td>
                   <div className="song">
@@ -298,10 +372,15 @@ function SongView({ s }: { s: SearchState }) {
                 <td className="num">
                   <div className="row-acts">
                     {lrcFor(c)}
-                    {track && c.id === track.chosen_candidate_id && !["failed", "matched"].includes(track.status) ? (
+                    {track && c.id === track.chosen_candidate_id && !track.file_missing && !["failed", "matched"].includes(track.status) ? (
                       <StatusBadge status={track.status} />
                     ) : (
-                      <button className="btn btn-sm btn-choose" disabled={!track || !!busy} title={track ? undefined : "等所有音源返回后再下载"} onClick={() => download(c)}>
+                      <button
+                        className="btn btn-sm btn-choose"
+                        disabled={!track || !!busy}
+                        title={track ? undefined : "等所有音源返回后再下载"}
+                        onClick={() => download(c)}
+                      >
                         <Download size={14} /> 下载
                       </button>
                     )}
@@ -313,7 +392,9 @@ function SongView({ s }: { s: SearchState }) {
         </table>
         {searching && shown.length === 0 && <SkeletonRows />}
         {!searching && track && cands.length === 0 && <div className="empty-row muted">没有搜到结果，换个写法试试。</div>}
-        {!searching && cands.length > 0 && shown.length === 0 && !showRejected && <div className="empty-row muted">搜到的结果都是其他版本，可以点下方查看。</div>}
+        {!searching && cands.length > 0 && shown.length === 0 && !showRejected && (
+          <div className="empty-row muted">搜到的结果都是其他版本，可以点下方查看。</div>
+        )}
         {rejected.length > 0 && (
           <div className="table-more">
             <button className="link-btn" onClick={searchActions.toggleRejected}>
@@ -371,7 +452,8 @@ function ArtistView({ s }: { s: SearchState }) {
       const next = await api.trackLyrics(t.id, true);
       searchActions.setPicked(token, next);
       const info = next.file?.lyrics;
-      if (hasLyrics(info)) toast("ok", `已保存歌词（${info!.source_label ?? "歌词"}）`);
+      if (info?.refresh_error) toast("info", `没更新成功，沿用原来的歌词：${info.refresh_error}`);
+      else if (hasLyrics(info)) toast("ok", `已保存歌词（${info!.source_label ?? "歌词"}）`);
       else toast("info", info?.error ?? "没有找到这首歌的歌词");
     } catch (e) {
       toast("bad", (e as Error).message);
@@ -452,7 +534,7 @@ function ArtistView({ s }: { s: SearchState }) {
                   <td className="num mono">{fmtDuration(song.duration)}</td>
                   <td className="num">
                     <div className="row-acts">
-                      {t?.file ? (
+                      {t?.file && !t.file_missing ? (
                         <LrcSwitch
                           on={hasLyrics(t.file.lyrics)}
                           busy={lyricsBusy === song.token}
@@ -486,7 +568,17 @@ function ArtistView({ s }: { s: SearchState }) {
   );
 }
 
-function ArtistSongAction({ song, track, working, onDownload }: { song: ArtistSong; track: Track | undefined; working: boolean; onDownload: () => void }) {
+function ArtistSongAction({
+  song,
+  track,
+  working,
+  onDownload,
+}: {
+  song: ArtistSong;
+  track: Track | undefined;
+  working: boolean;
+  onDownload: () => void;
+}) {
   const toast = useToast();
   if (working)
     return (
@@ -494,9 +586,32 @@ function ArtistSongAction({ song, track, working, onDownload }: { song: ArtistSo
         <LoaderCircle className="spin" size={13} /> 匹配中
       </span>
     );
+  if (track?.file_missing && track.chosen_candidate_id != null)
+    return (
+      <button
+        className="btn btn-sm btn-choose"
+        title="文件已被移走或删除，按原来的版本再下一次"
+        onClick={() =>
+          api
+            .batch([track.id], "redownload")
+            .then(({ updated, skipped = [] }) => {
+              if (updated[0]) searchActions.setPicked(song.token, updated[0]);
+              if (skipped.length) toast("info", skipped[0].reason);
+            })
+            .catch((e) => toast("bad", e.message))
+        }
+      >
+        <RotateCcw size={14} /> 重新下载
+      </button>
+    );
   if (track?.file)
     return (
-      <button className="icon-btn" onClick={() => api.reveal(track.id).catch((e) => toast("bad", e.message))} title="已下载，在文件夹中显示" aria-label={`在文件夹中显示 ${song.title}`}>
+      <button
+        className="icon-btn"
+        onClick={() => api.reveal(track.id).catch((e) => toast("bad", e.message))}
+        title="已下载，在文件夹中显示"
+        aria-label={`在文件夹中显示 ${song.title}`}
+      >
         <FolderOpen size={15} />
       </button>
     );
@@ -508,7 +623,11 @@ function ArtistSongAction({ song, track, working, onDownload }: { song: ArtistSo
       </a>
     );
   return (
-    <button className="btn btn-sm btn-choose" onClick={onDownload} title={track?.status === "failed" ? (track.error ?? "上次下载失败，再试一次") : undefined}>
+    <button
+      className="btn btn-sm btn-choose"
+      onClick={onDownload}
+      title={track?.status === "failed" ? (track.error ?? "上次下载失败，再试一次") : undefined}
+    >
       {track?.status === "failed" ? <RotateCcw size={14} /> : <Download size={14} />} {track?.status === "failed" ? "重试" : "下载"}
     </button>
   );

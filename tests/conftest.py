@@ -26,5 +26,6 @@ def config(tmp_path, monkeypatch):
 @pytest.fixture
 def service(config):
     value = Service(config)
+    value.events.interval = 0  # tests assert exact event sequences; coalescing is covered in test_jobs
     yield value
     value.close()

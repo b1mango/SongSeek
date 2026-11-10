@@ -172,3 +172,64 @@ def test_member_flag_persisted(service, monkeypatch, fee, cookie_set, expected):
     old = candidate.model_dump(exclude={"needs_member"})
     service.db.save("candidates", old)
     assert service.candidate(candidate.id).needs_member is False
+
+
+def test_repeated_single_search_reuses_its_row(service):
+    first = service.search_one("晴天 - 周杰伦", 180)["track"]
+    again = service.search_one("晴天 - 周杰伦", 180)["track"]
+    assert again.id == first.id
+    assert len(service.tracks(first.playlist_id)) == 1
+    other = service.search_one("晴天 (Live) - 周杰伦", 180)["track"]
+    assert other.id != first.id
+
+
+def test_researching_a_downloaded_track_keeps_it_done(service):
+    from songseek.models import DownloadedFile
+    track = service.search_one("晴天 - 周杰伦", 180)["track"]
+    track.status, track.file = "done", DownloadedFile(path="/tmp/x.mp3", size=1, format="mp3", bitrate=320, duration=180, sha256="x")
+    service.save_track(track)
+    result = service.search_track(track.id)
+    assert result["track"].status == "done"
+    assert service.search_one("晴天 - 周杰伦", 180)["track"].id == track.id
+
+
+@pytest.mark.parametrize("restriction", ["disabled", "scope"])
+def test_research_keeps_history_but_only_auto_selects_current_sources(service, monkeypatch, restriction):
+    primary = service.providers["mock"]
+    other = MockProvider(service.config)
+    service.providers["other"] = other
+    service.config.providers.append(ProviderInfo(id="other", label="其他", max_quality="128k", order=1))
+    def rows(provider, bitrate):
+        return [RawCandidate(provider, "song", "晴天", artist="周杰伦", duration=180, bitrate=bitrate)]
+    monkeypatch.setattr(primary, "search", lambda *args: rows("mock", 320))
+    monkeypatch.setattr(other, "search", lambda *args: rows("other", 128))
+    first = service.search_one("晴天 - 周杰伦", 180)["track"]
+    assert service.candidate(first.chosen_candidate_id).provider == "mock"
+    if restriction == "disabled":
+        service.config.providers[0].enabled = False
+    result = service.search_track(first.id, providers=["other"] if restriction == "scope" else None)
+    assert service.candidate(result["track"].chosen_candidate_id).provider == "other"
+    assert {c.provider for c in result["candidates"]} == {"mock", "other"}
+    assert service.track(first.id).providers == (["other"] if restriction == "scope" else None)
+
+
+def test_duration_consensus_excludes_historical_sources_outside_scope(service, monkeypatch):
+    service.providers["other"] = MockProvider(service.config)
+    service.config.providers.append(ProviderInfo(id="other", label="其他", max_quality="320k", order=1))
+    for identifier, provider in service.providers.items():
+        monkeypatch.setattr(provider, "search", lambda *args, p=identifier: [RawCandidate(p, "song", "晴天", artist="周杰伦", duration=180)])
+    first = service.search_one("晴天 - 周杰伦")["track"]
+    assert first.status == "matched"
+    result = service.search_track(first.id, providers=["mock"])
+    assert result["track"].status == "needs_review" and result["track"].chosen_candidate_id is None
+    assert {c.provider for c in result["candidates"]} == {"mock", "other"}
+
+
+def test_auto_selection_rechecks_source_disabled_during_search(service, monkeypatch):
+    def search(*args):
+        service.config.providers[0].enabled = False
+        return [RawCandidate("mock", "song", "晴天", artist="周杰伦", duration=180)]
+    monkeypatch.setattr(service.providers["mock"], "search", search)
+    result = service.search_one("晴天 - 周杰伦", 180)
+    assert result["track"].chosen_candidate_id is None
+    assert len(result["candidates"]) == 1

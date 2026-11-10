@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CircleAlert,
   Download,
@@ -7,6 +7,7 @@ import {
   ListChecks,
   LoaderCircle,
   Pencil,
+  Plus,
   ScrollText,
   RotateCcw,
   Search,
@@ -14,40 +15,86 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import { api } from "../api";
-import { Flags, LrcSwitch, LyricsTag, StatusBadge, toneOfScore, useLyricsDefault, useToast } from "../components";
+import { api, ApiError } from "../api";
+import { Flags, isTyping, LrcSwitch, LyricsTag, StatusBadge, toneOfScore, useLyricsDefault, useToast } from "../components";
 import { fmtDuration } from "../format";
 import { PlayButton } from "../player";
 import { href, navigate, subscribeJobFocus } from "../router";
 import { FlowLabel, RowFlow } from "../RowFlow";
 import { StatusBar, StatusFilters, matchesFilter, type Filter } from "../StatusStrip";
-import { onEvent, removePlaylist, upsertJob, upsertPlaylist, useStore } from "../store";
-import type { BatchAction, Playlist, Track } from "../types";
+import { getPlaylistRevision, isPlaylistDeleted, isTrackDeleted, onEvent, removePlaylist, removeTrack, upsertJob, upsertPlaylist, useStore } from "../store";
+import type { BatchAction, Playlist, Track, TrackStatus } from "../types";
 
 export function PlaylistPage({ id }: { id: number }) {
   const toast = useToast();
   const [tracks, setTracks] = useState<Track[] | null>(null);
   const [fallback, setFallback] = useState<Playlist | null>(null);
-  const playlist = useStore((s) => s.playlists.find((p) => p.id === id)) ?? fallback;
+  const playlist = useStore((s) => s.playlists.find((p) => p.id === id)) ?? (isPlaylistDeleted(id) ? null : fallback);
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const anchor = useRef<number | null>(null);
 
   useEffect(() => {
-    api
-      .playlist(id)
-      .then(({ playlist, tracks }) => {
-        setFallback(playlist);
-        upsertPlaylist(playlist);
-        setTracks(tracks);
-      })
-      .catch((e) => toast("bad", e.message));
-    return onEvent("track", (t) => {
-      if (t.playlist_id !== id) return;
-      setTracks((xs) => (xs ? xs.map((x) => (x.id === t.id ? t : x)) : xs));
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !isTyping(e.target)) setSelected(new Set());
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let request = 0;
+    let trackEvents = 0;
+    const load = () => {
+      const currentRequest = ++request;
+      const initialTrackEvents = trackEvents;
+      const initialPlaylistRevision = getPlaylistRevision(id);
+      api.playlist(id).then(({ playlist, tracks }) => {
+        if (!active || currentRequest !== request || isPlaylistDeleted(id)) return;
+        // A snapshot taken before a live track update must not overwrite it.
+        if (trackEvents !== initialTrackEvents) return load();
+        if (getPlaylistRevision(id) === initialPlaylistRevision) {
+          setFallback(playlist);
+          upsertPlaylist(playlist);
+        }
+        setTracks(tracks.filter((track) => !isTrackDeleted(track.id, id)));
+      }).catch((e) => {
+        if (active && currentRequest === request && !isPlaylistDeleted(id)) toast("bad", e.message);
+      });
+    };
+    const offTrack = onEvent("track", (t) => {
+      if (t.playlist_id !== id || isTrackDeleted(t.id, id)) return;
+      trackEvents++;
+      // Unknown ids are songs appended elsewhere (another window, or before our POST returned).
+      setTracks((xs) =>
+        !xs ? xs : xs.some((x) => x.id === t.id) ? xs.map((x) => (x.id === t.id ? t : x)) : [...xs, t].sort((a, b) => a.position - b.position),
+      );
     });
+    const offTrackDeleted = onEvent("track_deleted", (t) => {
+      if (t.playlist_id !== id) return;
+      trackEvents++;
+      setTracks((xs) => xs?.filter((x) => x.id !== t.id) ?? null);
+      setSelected((sel) => {
+        if (!sel.has(t.id)) return sel;
+        const next = new Set(sel);
+        next.delete(t.id);
+        return next;
+      });
+      if (anchor.current === t.id) anchor.current = null;
+    });
+    const offResync = onEvent("resync", load);
+    load();
+    return () => {
+      active = false;
+      offTrack();
+      offTrackDeleted();
+      offResync();
+    };
   }, [id, toast]);
 
   // Sidebar job card clicked: show the track being worked on, even if the current filter hides it.
@@ -96,7 +143,8 @@ export function PlaylistPage({ id }: { id: number }) {
     try {
       await fn();
     } catch (e) {
-      toast("bad", (e as Error).message);
+      // "nothing to do" is an explanation, not a failure
+      toast(e instanceof ApiError && e.code === "no_eligible_tracks" ? "info" : "bad", (e as Error).message);
     } finally {
       setBusy(null);
     }
@@ -114,7 +162,7 @@ export function PlaylistPage({ id }: { id: number }) {
     });
   // One button for the whole list: reveals a selected downloaded song if any, else the first one (same folder).
   const openFolder = () => {
-    const target = tracks.find((t) => t.file && selected.has(t.id)) ?? tracks.find((t) => t.file);
+    const target = tracks.find((t) => t.file && !t.file_missing && selected.has(t.id)) ?? tracks.find((t) => t.file && !t.file_missing);
     if (target) api.reveal(target.id).catch((e) => toast("bad", e.message));
   };
   const fillLyrics = () =>
@@ -124,11 +172,37 @@ export function PlaylistPage({ id }: { id: number }) {
     });
   const batch = (action: BatchAction, ids: number[]) =>
     run(action, async () => {
-      const { updated } = await api.batch(ids, action);
+      const { updated, skipped = [] } = await api.batch(ids, action);
       const map = new Map(updated.map((t) => [t.id, t]));
       setTracks((xs) => xs!.map((x) => map.get(x.id) ?? x));
       setSelected(new Set());
+      if (skipped.length) toast("info", `${skipped.length} 首未处理：${skipped[0].reason}`);
       return updated;
+    });
+
+  // Appends pasted songs, then searches just those so the rest of the list is left alone.
+  const addSongs = (text: string) =>
+    run("add", async () => {
+      const { rows } = await api.parse({ kind: "text", text });
+      if (!rows.length) return toast("info", "没认出歌曲，每行写一首，例如「晴天 - 周杰伦」");
+      const { added, duplicates } = await api.addTracks(id, rows);
+      const dup = duplicates ? `，${duplicates} 首清单里已经有了` : "";
+      if (!added.length) return toast("info", `这 ${duplicates} 首都已在清单里，没有新增`);
+      setTracks((xs) => {
+        const known = new Set(xs!.map((x) => x.id));
+        return [...xs!, ...added.filter((t) => !known.has(t.id) && !isTrackDeleted(t.id, id))].sort((a, b) => a.position - b.position);
+      });
+      setAdding(false);
+      setFilter("all");
+      setQ("");
+      upsertJob(
+        await api.searchPlaylist(
+          id,
+          added.map((t) => t.id),
+        ),
+      );
+      toast("info", `已添加 ${added.length} 首${dup}，正在搜索`);
+      requestAnimationFrame(() => document.querySelector(`[data-track="${added[0].id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
     });
 
   // Deleting is per track on the server; busy tracks (searching / downloading) refuse and are reported.
@@ -139,6 +213,7 @@ export function PlaylistPage({ id }: { id: number }) {
     return run("delete", async () => {
       const results = await Promise.allSettled(ids.map((x) => api.deleteTrack(x)));
       const gone = new Set(ids.filter((_, i) => results[i].status === "fulfilled"));
+      gone.forEach((trackId) => removeTrack({ id: trackId, playlist_id: id }));
       setTracks((xs) => xs!.filter((x) => !gone.has(x.id)));
       setSelected((sel) => new Set([...sel].filter((x) => !gone.has(x))));
       const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
@@ -189,12 +264,20 @@ export function PlaylistPage({ id }: { id: number }) {
             </p>
           </div>
           <div className="head-actions">
+            <button
+              className={`btn${adding ? " is-on" : ""}`}
+              onClick={() => setAdding((x) => !x)}
+              aria-expanded={adding}
+              title="往这份清单里追加歌曲"
+            >
+              <Plus size={16} /> 添加歌曲
+            </button>
             {c.done > 0 && (
               <button className="btn" disabled={busy === "lyrics"} onClick={fillLyrics} title="给已下载但还没有歌词的歌补上 .lrc 歌词">
                 {busy === "lyrics" ? <LoaderCircle className="spin" size={16} /> : <ScrollText size={16} />} 补歌词
               </button>
             )}
-            {tracks.some((t) => t.file) && (
+            {tracks.some((t) => t.file && !t.file_missing) && (
               <button className="btn" onClick={openFolder} title="打开下载文件夹（勾选了歌曲时定位到该首）">
                 <FolderOpen size={16} /> 打开文件夹
               </button>
@@ -222,14 +305,19 @@ export function PlaylistPage({ id }: { id: number }) {
         <StatusBar counts={c} />
       </div>
 
+      {adding && <AddSongs busy={busy === "add"} onAdd={addSongs} onClose={() => setAdding(false)} />}
+
       <NextSteps
         counts={c}
+        missing={tracks.filter((t) => t.file_missing && t.chosen_candidate_id != null).map((t) => t.id)}
+        searchFailed={tracks.filter((t) => t.status === "not_found" && t.search_failed).length}
+        onRedownload={(ids) => batch("redownload", ids)}
         busy={busy}
         onSearch={() => startSearch()}
         onDownload={() => startDownload()}
         onRetry={() => {
           const ids = tracks.filter((t) => t.status === "failed").map((t) => t.id);
-          batch("retry", ids).then(() => startDownload(ids));
+          batch("retry", ids); // the server queues the download itself
         }}
         reviewHref={href({ page: "review", id })}
       />
@@ -275,15 +363,22 @@ export function PlaylistPage({ id }: { id: number }) {
                 t={t}
                 flash={flash === t.id}
                 checked={selected.has(t.id)}
-                onCheck={() =>
+                onCheck={(shift) => {
+                  // Shift-click selects (or clears) everything between the last clicked row and this one.
+                  const from = shift && anchor.current != null ? visible.findIndex((x) => x.id === anchor.current) : -1;
+                  const to = visible.findIndex((x) => x.id === t.id);
+                  const span = from < 0 ? [t] : visible.slice(Math.min(from, to), Math.max(from, to) + 1);
+                  const on = !selected.has(t.id);
                   setSelected((s) => {
                     const n = new Set(s);
-                    if (n.has(t.id)) n.delete(t.id);
-                    else n.add(t.id);
+                    span.forEach((x) => (on ? n.add(x.id) : n.delete(x.id)));
                     return n;
-                  })
-                }
+                  });
+                  anchor.current = t.id;
+                }}
+                busy={!!busy}
                 onUpdate={(next) => setTracks((xs) => (xs ? xs.map((x) => (x.id === next.id ? next : x)) : xs))}
+                onRedownload={() => batch("redownload", [t.id])}
                 onDelete={() => removeTracks([t.id])}
               />
             ))}
@@ -293,37 +388,132 @@ export function PlaylistPage({ id }: { id: number }) {
       </div>
 
       {selectedIds.length > 0 && (
-        <div className="bulk" role="toolbar" aria-label="批量操作">
-          <span className="bulk-count">已选 {selectedIds.length} 首</span>
-          <button className="btn btn-sm" onClick={() => batch("accept_best", selectedIds)}>
-            <ListChecks size={14} /> 通过最佳候选
-          </button>
-          <button className="btn btn-sm" onClick={() => startSearch(selectedIds)}>
-            <Search size={14} /> 重新搜索
-          </button>
-          <button className="btn btn-sm" onClick={() => startDownload(selectedIds)}>
-            <Download size={14} /> 下载
-          </button>
-          <button className="btn btn-sm" onClick={() => batch("skip", selectedIds)}>
-            <SkipForward size={14} /> 跳过
-          </button>
-          <button className="btn btn-sm" onClick={() => batch("unskip", selectedIds)}>
-            <Undo2 size={14} /> 取消跳过
-          </button>
-          <button className="btn btn-sm" disabled={busy === "delete"} onClick={() => removeTracks(selectedIds)}>
-            <Trash2 size={14} /> 删除
-          </button>
-          <button className="link-btn" onClick={() => setSelected(new Set())}>
-            清除选择
-          </button>
-        </div>
+        <BulkBar
+          picked={tracks.filter((t) => selected.has(t.id))}
+          hidden={selectedIds.filter((x) => !visible.some((t) => t.id === x)).length}
+          busy={busy}
+          onBatch={batch}
+          onSearch={startSearch}
+          onDownload={startDownload}
+          onDelete={removeTracks}
+          onClear={() => setSelected(new Set())}
+        />
       )}
+    </div>
+  );
+}
+
+const BUSY: TrackStatus[] = ["searching", "queued", "downloading"];
+
+/**
+ * Floating actions for the selection. Each button only sends the songs it applies to and shows how
+ * many that is, so 下载 never re-queues finished songs and 通过最佳候选 never touches downloaded ones.
+ */
+function BulkBar({
+  picked,
+  hidden,
+  busy,
+  onBatch,
+  onSearch,
+  onDownload,
+  onDelete,
+  onClear,
+}: {
+  picked: Track[];
+  hidden: number;
+  busy: string | null;
+  onBatch: (action: BatchAction, ids: number[]) => void;
+  onSearch: (ids: number[]) => void;
+  onDownload: (ids: number[]) => void;
+  onDelete: (ids: number[]) => void;
+  onClear: () => void;
+}) {
+  const ids = (ok: (t: Track) => boolean) => picked.filter(ok).map((t) => t.id);
+  const idle = (t: Track) => !BUSY.includes(t.status);
+  const actions = [
+    {
+      key: "accept",
+      label: "通过最佳候选",
+      Icon: ListChecks,
+      ids: ids((t) => t.status === "needs_review"),
+      run: (x: number[]) => onBatch("accept_best", x),
+      why: "待审核",
+    },
+    {
+      key: "search",
+      label: "重新搜索",
+      Icon: Search,
+      ids: ids((t) => idle(t) && t.status !== "done" && t.status !== "skipped"),
+      run: onSearch,
+      why: "未完成",
+    },
+    { key: "download", label: "下载", Icon: Download, ids: ids((t) => t.status === "matched"), run: onDownload, why: "待下载" },
+    {
+      key: "retry",
+      label: "重试",
+      Icon: RotateCcw,
+      ids: ids((t) => t.status === "failed" && t.chosen_candidate_id != null),
+      run: (x: number[]) => onBatch("retry", x),
+      why: "失败",
+    },
+    {
+      key: "redownload",
+      label: "重新下载",
+      Icon: Download,
+      ids: ids((t) => !!t.file_missing && t.chosen_candidate_id != null),
+      run: (x: number[]) => onBatch("redownload", x),
+      why: "文件丢失",
+    },
+    {
+      key: "skip",
+      label: "跳过",
+      Icon: SkipForward,
+      ids: ids((t) => idle(t) && t.status !== "done" && t.status !== "skipped"),
+      run: (x: number[]) => onBatch("skip", x),
+      why: "未完成",
+    },
+    {
+      key: "unskip",
+      label: "取消跳过",
+      Icon: Undo2,
+      ids: ids((t) => t.status === "skipped"),
+      run: (x: number[]) => onBatch("unskip", x),
+      why: "已跳过",
+    },
+  ].filter((a) => a.ids.length > 0);
+  const deletable = ids(idle);
+  return (
+    <div className="bulk" role="toolbar" aria-label="批量操作">
+      <span className="bulk-count" title={hidden ? `${hidden} 首不在当前筛选里，也会一起处理` : undefined}>
+        已选 {picked.length} 首{hidden > 0 && <small> · {hidden} 首未显示</small>}
+      </span>
+      {actions.map(({ key, label, Icon, ids: x, run, why }) => (
+        <button key={key} className="btn btn-sm" disabled={!!busy} onClick={() => run(x)} title={`对其中 ${x.length} 首${why}的歌生效`}>
+          <Icon size={14} /> {label}
+          {x.length < picked.length && <span className="bulk-n mono">{x.length}</span>}
+        </button>
+      ))}
+      <button
+        className="btn btn-sm"
+        disabled={!!busy || !deletable.length}
+        onClick={() => onDelete(deletable)}
+        title={deletable.length < picked.length ? "正在处理的歌不能删除" : undefined}
+      >
+        <Trash2 size={14} /> 删除
+        {deletable.length > 0 && deletable.length < picked.length && <span className="bulk-n mono">{deletable.length}</span>}
+      </button>
+      <button className="link-btn" onClick={onClear} title="Esc">
+        清除选择
+      </button>
     </div>
   );
 }
 
 function NextSteps({
   counts: c,
+  missing,
+  searchFailed,
+  onRedownload,
   busy,
   onSearch,
   onDownload,
@@ -331,6 +521,10 @@ function NextSteps({
   reviewHref,
 }: {
   counts: Playlist["counts"];
+  /** done tracks whose file vanished from disk and can be fetched again */
+  missing: number[];
+  searchFailed: number;
+  onRedownload: (ids: number[]) => void;
   busy: string | null;
   onSearch: () => void;
   onDownload: () => void;
@@ -375,12 +569,27 @@ function NextSteps({
         </span>
       </button>
     ),
+    missing.length > 0 && (
+      <button key="m" className="step-btn tone-warn" disabled={!!busy} onClick={() => onRedownload(missing)}>
+        <Download size={18} />
+        <span>
+          <b>重新下载丢失的 {missing.length} 首</b>
+          <small>文件被移走或删除了，按原来选定的版本再下一次</small>
+        </span>
+      </button>
+    ),
     c.pending === 0 && c.not_found > 0 && (
       <button key="n" className="step-btn tone-miss" disabled={!!busy} onClick={onSearch}>
         <Search size={18} />
         <span>
           <b>重新搜索未找到的 {c.not_found} 首</b>
-          <small>也可以进审核页换关键词手动搜</small>
+          <small>
+            {searchFailed === c.not_found
+              ? "上次是音源连不上，检查网络或代理后再搜"
+              : searchFailed > 0
+                ? `其中 ${searchFailed} 首是音源连不上，不是没有这首歌`
+                : "也可以进审核页换关键词手动搜"}
+          </small>
         </span>
       </button>
     ),
@@ -388,6 +597,7 @@ function NextSteps({
 
   if (!steps.length) {
     const allDone = c.total > 0 && c.done + c.skipped === c.total;
+    if (!c.total) return <div className="next-empty">清单还是空的，点右上角「添加歌曲」粘贴几首。</div>;
     return <div className={`next-empty${allDone ? " is-done" : ""}`}>{allDone ? "这份清单已经全部处理完。" : "正在处理中，进度会实时更新。"}</div>;
   }
   return <div className="next-steps">{steps}</div>;
@@ -398,14 +608,18 @@ function TrackRow({
   flash,
   checked,
   onCheck,
+  busy,
   onUpdate,
+  onRedownload,
   onDelete,
 }: {
   t: Track;
   flash: boolean;
   checked: boolean;
-  onCheck: () => void;
+  busy: boolean;
+  onCheck: (shift: boolean) => void;
   onUpdate: (t: Track) => void;
+  onRedownload: () => void;
   onDelete: () => void;
 }) {
   const reviewable = t.candidate_count > 0 || t.status === "not_found";
@@ -418,7 +632,7 @@ function TrackRow({
     >
       <td className="check-col" onClick={(e) => e.stopPropagation()}>
         {t.status === "downloading" && <RowFlow trackId={t.id} />}
-        <input type="checkbox" checked={checked} onChange={onCheck} aria-label={`选择 ${t.title}`} />
+        <input type="checkbox" checked={checked} onChange={(e) => onCheck((e.nativeEvent as MouseEvent).shiftKey)} aria-label={`选择 ${t.title}`} />
       </td>
       <td className="num mono muted">{t.position}</td>
       <td>
@@ -427,10 +641,21 @@ function TrackRow({
             {t.title} <Flags flags={t.flags} />
           </span>
           <span className="song-artist">{t.artist || "未写歌手"}</span>
-          {t.error && (t.status === "failed" || t.status === "not_found") && (
-            <span className={`song-error${t.status === "not_found" ? " tone-text-miss" : ""}`}>
-              <CircleAlert size={12} aria-hidden /> {t.error}
+          {t.file_missing ? (
+            <span className="song-error tone-text-warn" title={t.file?.path}>
+              <CircleAlert size={12} aria-hidden /> 文件已被移走或删除，可重新下载
             </span>
+          ) : t.status === "not_found" && t.search_failed ? (
+            <span className="song-error tone-text-warn" title={t.error ?? undefined}>
+              <CircleAlert size={12} aria-hidden /> 音源都没连上，检查网络或代理后重新搜索
+            </span>
+          ) : (
+            t.error &&
+            (t.status === "failed" || t.status === "not_found" || t.status === "done") && (
+              <span className={`song-error${t.status === "not_found" ? " tone-text-miss" : t.status === "done" ? " tone-text-warn" : ""}`}>
+                <CircleAlert size={12} aria-hidden /> {t.error}
+              </span>
+            )
           )}
         </div>
       </td>
@@ -445,9 +670,15 @@ function TrackRow({
           <div className="src">
             <span>{t.file.provider_label ?? "已下载"}</span>
             <span className="mono small muted">
-              {t.file.format.toUpperCase()}
-              {t.file.bitrate ? ` · ${t.file.bitrate}k` : ""} · {fmtDuration(t.file.duration)}
-              <LyricsTag info={t.file.lyrics} />
+              {t.file_missing ? (
+                "文件不在原位置"
+              ) : (
+                <>
+                  {t.file.format.toUpperCase()}
+                  {t.file.bitrate ? ` · ${t.file.bitrate}k` : ""} · {fmtDuration(t.file.duration)}
+                  <LyricsTag info={t.file.lyrics} />
+                </>
+              )}
             </span>
           </div>
         ) : t.chosen ? (
@@ -462,8 +693,13 @@ function TrackRow({
         )}
       </td>
       <td className="num row-actions" onClick={(e) => e.stopPropagation()}>
-        {t.status !== "skipped" && <TrackLrc t={t} onUpdate={onUpdate} />}
-        {t.file && (
+        {t.status !== "skipped" && !t.file_missing && <TrackLrc t={t} onUpdate={onUpdate} />}
+        {t.file_missing && t.chosen_candidate_id != null && (
+          <button className="link-btn" disabled={!!busy} onClick={onRedownload}>
+            重新下载
+          </button>
+        )}
+        {t.file && !t.file_missing && (
           <PlayButton
             playable={{
               key: `t:${t.id}`,
@@ -558,4 +794,37 @@ function TrackLrc({ t, onUpdate }: { t: Track; onUpdate: (t: Track) => void }) {
     );
   const on = t.lyrics_wanted ?? lyricsDefault;
   return <LrcSwitch on={on} busy={busy} onToggle={act} title={on ? "下载时一起保存 .lrc 歌词（点击取消）" : "只下载音频（点击同时保存歌词）"} />;
+}
+
+/** Inline paste box for appending songs; same line format as the import page. Ctrl/⌘+Enter adds. */
+function AddSongs({ busy, onAdd, onClose }: { busy: boolean; onAdd: (text: string) => void; onClose: () => void }) {
+  const [text, setText] = useState("");
+  const submit = () => text.trim() && !busy && onAdd(text);
+  return (
+    <div className="card add-songs fade-in">
+      <textarea
+        className="input textarea mono-ish"
+        rows={4}
+        autoFocus
+        placeholder={"每行一首，例如：\n晴天 - 周杰伦\n后来 - 刘若英"}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
+          if (e.key === "Escape") onClose();
+        }}
+      />
+      <div className="row between">
+        <span className="muted small">清单里已有的歌会自动略过；添加后只搜索新加的这几首。</span>
+        <div className="row gap-8">
+          <button className="btn btn-ghost" onClick={onClose}>
+            取消
+          </button>
+          <button className="btn btn-primary" disabled={!text.trim() || busy} onClick={submit} title="⌘/Ctrl + Enter">
+            {busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />} 添加并搜索
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

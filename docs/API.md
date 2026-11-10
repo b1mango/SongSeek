@@ -44,6 +44,8 @@ interface DownloadedFile {
   sha256: string;
   provider: string | null;        // 实际下载所用音源（可能是回退后的音源）
   provider_label: string | null;
+  candidate_id: number | null;    // 文件对应的候选，换版本失败时用于恢复原选择
+  chosen_by: "auto" | "user" | null;
 }
 
 interface Track {
@@ -55,6 +57,7 @@ interface Track {
   album: string;
   duration: number | null;
   lyrics_wanted: boolean | null; // null 跟随 settings.lyrics，true/false 覆盖全局
+  providers: string[] | null;    // 最近一次搜索明确指定的音源范围；null 使用当前启用音源，只读
   flags: VersionFlag[];   // 从清单歌名解析出的版本标记
   status: TrackStatus;
   chosen_candidate_id: number | null;
@@ -66,6 +69,8 @@ interface Track {
   best_score: number | null;     // 最佳候选得分，0~100
   candidate_count: number;
   file: DownloadedFile | null;
+  file_missing: boolean;         // 只读，每次读取时检查：done 且记录的文件已不在原位置（被移走或删除）
+  search_failed: boolean;        // not_found 且本次搜索没有任何音源成功响应（全部报错或超时），而不是没有这首歌
   error: string | null;          // 最近一次失败原因（中文）
   note: string;
   updated_at: string;
@@ -160,13 +165,14 @@ interface ParseResult {
 | GET | `/api/playlists/{id}` | `{playlist: Playlist, tracks: Track[]}` |
 | PATCH | `/api/playlists/{id}` | `{name}` |
 | DELETE | `/api/playlists/{id}` | 删除清单记录，不删除已下载的文件 |
+| POST | `/api/playlists/{id}/tracks` | `{rows: ParsedRow[]}`（1–5000 行），追加到清单末尾，返回 `{added: Track[], duplicates: number}`。与清单已有歌曲及本次其他行比较：规范化后歌名、歌手相同，且时长双方均缺失或双方都有且相差不超过 2s 时视为重复，计入 `duplicates` 不追加；仅一方缺时长则保留。新曲目为 `pending`，不自动搜索；有新增时发一次 `playlist` 事件 |
 | GET | `/api/playlists/{id}/export.csv` | 导出结果 CSV，列为：序号、歌名、歌手、状态、来源、音质、时长、文件路径、备注 |
-| PATCH | `/api/tracks/{id}` | `{title?, artist?, album?, duration?, note?, lyrics_wanted?}`，返回 `Track` |
+| PATCH | `/api/tracks/{id}` | `{title?, artist?, album?, duration?, note?, lyrics_wanted?}`，返回 `Track`。只改专辑、备注或歌词选择保留匹配；歌名、歌手或时长实际变化时，在同一事务中删除候选并清空选择、候选数与最高分。有下载文件保留文件且保持 `done`，否则回到 `pending` |
 | DELETE | `/api/tracks/{id}` | 从清单中删除该曲目及其候选，不删除已下载的文件；搜索或下载中返回 409 `track_busy` |
 | GET | `/api/tracks/{id}/candidates` | `Candidate[]`，按 rank 排序，包含 reject |
-| POST | `/api/tracks/{id}/choose` | `{candidate_id}`，选定候选，status 改为 matched、chosen_by 改为 user，返回 `Track` |
-| POST | `/api/tracks/{id}/search` | `{query?, providers?: string[]}`，同步重新搜索；新候选追加并重新排序，返回 `{track, candidates}`。超时上限 30s |
-| POST | `/api/tracks/batch` | `{ids: number[], action}`，返回 `{updated: Track[]}`。action 取值：`accept_best`（选定每首的最佳候选，reject 不选）、`skip`、`unskip`（恢复到搜索前或搜索后的合理状态）、`retry`（失败的重新排队） |
+| POST | `/api/tracks/{id}/choose` | `{candidate_id}`，返回 `Track`。选择当前候选幂等，不改状态；改选后为 `matched`、chosen_by 为 `user`。已有文件时保留原文件直到新下载成功；改选未启用或不在本次搜索范围的音源返回 `unknown_provider`，应启用音源并重搜后选择 |
+| POST | `/api/tracks/{id}/search` | `{query?, providers?: string[]}`，同步重新搜索；新候选追加并重新排序，返回 `{track, candidates}`。已下载的曲目保持 `done`，新候选只作为备选。超时上限 30s |
+| POST | `/api/tracks/batch` | `{ids: number[], action}`，返回 `{updated: Track[], skipped: {id: number, reason: string}[]}`。`updated` 只包含实际改变的曲目，`skipped` 给出未处理的中文原因。action：`accept_best` 只处理 `needs_review`，选择当前启用及本次范围内的最佳非 reject 候选；`skip` 排除有下载文件或已跳过的曲目；`unskip` 恢复合理状态并清掉旧错误；`retry` 将已选定版本的失败下载重新排队并清掉旧错误；`redownload` 只处理 `file_missing` 且有已选定版本的曲目，清掉文件记录、回到 `matched` 并重新排队下载。`retry` 与 `redownload` 每个清单只启动一个下载任务。忙碌或已不存在的曲目逐首计入 `skipped` |
 | GET | `/api/tracks/{id}/audio` | 播放已下载的文件，支持 Range |
 | POST | `/api/tracks/{id}/reveal` | 在系统文件管理器中显示该文件，返回 `{ok: true}` |
 
@@ -177,8 +183,16 @@ interface ParseResult {
 | POST | `/api/playlists/{id}/search` | `{track_ids?}`，省略时搜索所有 pending 和 not_found 的曲目。返回 `Job` |
 | POST | `/api/playlists/{id}/download` | `{track_ids?, lyrics?: boolean\|null}`，省略 track_ids 时下载所有 matched 曲目。传 lyrics 时，在入队前为选中曲目设置 lyrics_wanted；省略保留原选择，null 恢复跟随设置。返回 `Job` |
 | GET | `/api/jobs` | 进行中及最近 20 个 `Job[]` |
-| POST | `/api/jobs/{id}/cancel` | 返回 `Job` |
+| POST | `/api/jobs/{id}/cancel` | 返回 `Job`。尚未开始的任务立即取消 Future，恢复 `queued` 为 `matched`、释放预留并保存／推送 `cancelled`；已开始的任务允许当前曲目完成后取消 |
 | GET | `/api/candidates/{id}/preview` | 代理该候选的音频流，用于试听，支持 Range。只接受数据库里已有的候选 ID，不能当作通用代理 |
+
+搜索、下载和歌词任务在没有可处理曲目时不创建 Job，返回 HTTP 409、`error.code="no_eligible_tracks"`，`message` 以「没有可处理的歌曲：」开头并说明对应任务的原因及下一步。
+
+任务提交会在曲目锁内复核状态、预留曲目并入队，每首处理结束立即释放预留。曲目被其他操作占用时，本次任务跳过该曲目，不将其改为失败。下载 Job 创建时固定输出目录、清单分组名和文件名模板；中途修改设置或重命名清单只影响之后创建的任务。
+
+自动选定和下载只使用当前启用、且属于最近一次明确指定音源范围的候选；未指定范围时使用当前启用来源。历史候选仍保留供查看。同录音回退以选中候选的规范化歌名、歌手、版本标记和时长容差为准，不按原清单的 `match` 判定跨版本换源。换版本的所有可用候选下载失败时，恢复原文件、原选择及 `done`，`Track.error` 为「换版本下载失败，已保留原文件：…」。
+
+音频发布在目录发布锁内分配唯一 stem，冲突检查包括其他扩展名和 `.lrc`；同名文件与新音频 SHA256 相同时直接复用该文件，不另存副本。目录权限、磁盘空间及路径类型等本地写入问题转成 `storage_error`，下载立即停止换源，提示清理空间或更换输出目录。发布前持久化本次曲目、候选、目标路径和文件 SHA256；音频发布成功后立即保存 `done` 和文件记录并删除该对账记录，再补歌词。启动恢复只认领本次记录中路径存在、校验值与时长一致的音频；换版本中断也会优先恢复已发布的新文件，否则保留原文件及其选择；未发布的曲目可重试。启动时清理当前输出目录及其一层清单子目录内的 `.songseek-*.part` 残留文件，其他名称、目录和符号链接不删除；目录不可访问时跳过清理，允许启动后更换输出目录。
 
 ### 歌曲／歌手搜索及 NDJSON
 
@@ -186,7 +200,7 @@ interface ParseResult {
 
 查询拆分仅参考网易云、酷狗、QQ（VKeys）的曲名和歌手，支持“歌名 歌手”和“歌手 歌名”以及两种带 ` - ` 的顺序，多来源一致优先。同票按来源顺序；无曲库证据的显式分隔仍按“歌名 - 歌手”解释。歌手识别同时运行精确名称／别名查找与首轮歌曲查询；可信结果存在同名歌曲时优先歌曲模式。
 
-歌曲模式才在「单曲搜索」（source=`search`）中新建 Track。歌手模式不创建 Track 或清单。事件顺序：
+歌曲模式才在「单曲搜索」（source=`search`）中使用 Track：歌名、歌手（规范化后）相同且时长相差不超过 2s 的空闲曲目会被复用（优先已下载的），否则新建。歌手模式不创建 Track 或清单。事件顺序：
 
 ```ts
 {type:"start", track_id:number|null, providers:[{id,label}]}
@@ -245,15 +259,15 @@ Token 不透明，候选保存在进程内 LRU（4096 条，2 小时 TTL），�
 成功返回图片字节，`Content-Type` 为 `image/jpeg`、`image/png` 或 `image/webp`，并带 `Cache-Control: public, max-age=86400`。远程封面使用对应音源的直连/代理与 Referer 策略；每次获取超时约 5 秒，图片上限 5 MiB，内存 LRU 缓存最多 64 张。无可用封面返回 HTTP 404：`{"error":{"code":"cover_not_found","message":"没有找到可用封面"}}`；曲目或候选 ID 不存在使用原有 `not_found` 错误。接口只接受已有 ID。
 
 ### 歌词
-`LyricsResponse = {lrc: string|null, synced: bool, source: string|null, source_label: string|null, translation: string|null}`；`DownloadedFile.lyrics = {path, source, source_label, synced, translated, embedded, error} | null`。
+`LyricsResponse = {lrc: string|null, synced: bool, source: string|null, source_label: string|null, translation: string|null}`；`DownloadedFile.lyrics = {path, source, source_label, synced, translated, embedded, error, refresh_error?: string|null} | null`。
 来源顺序：选定候选 → 同版本其他候选 → 网易云新搜索 → 酷狗歌词库关键词 → LRCLIB，同步歌词优先，总预算 8 秒；命中缓存 10 分钟，未命中 60 秒。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/candidates/{id}/lyrics` | 试听用歌词，返回 `LyricsResponse` |
 | GET | `/api/tracks/{id}/lyrics` | 已下载曲目：读取旁边的 .lrc，没有时按选定候选查找 |
-| POST | `/api/tracks/{id}/lyrics` | `{force?}`，显式为已下载曲目保存歌词，即使全局 lyrics 或该曲目 lyrics_wanted 为 false 也执行；已有 .lrc 默认跳过，返回 `Track` |
-| POST | `/api/playlists/{id}/lyrics` | `{force?}`，批量补歌词（默认跳过已有 .lrc 的），返回 `Job`（kind `lyrics`） |
+| POST | `/api/tracks/{id}/lyrics` | `{force?}`，显式为已下载曲目保存歌词，即使全局 lyrics 或该曲目 lyrics_wanted 为 false 也执行；已有 .lrc 默认跳过，返回 `Track`。强制更新失败时保留原有效 LyricsInfo，在 `refresh_error` 返回本次中文错误；后续更新成功清空 `refresh_error`。批量任务同样保留原歌词，本次失败计入 Job.failed |
+| POST | `/api/playlists/{id}/lyrics` | `{force?}`，批量补歌词（默认跳过已有 .lrc 的，也跳过 `file_missing` 的曲目），返回 `Job`（kind `lyrics`） |
 
 下载和清单批量补歌词遵守 Track.lyrics_wanted：true 强制获取，false 跳过，null 跟随全局。修改此字段不清空候选、不重置状态。CSV 列不变。
 
@@ -265,9 +279,13 @@ Token 不透明，候选保存在进程内 LRU（4096 条，2 小时 TTL），�
 `GET /api/events` 返回 `text/event-stream`，每 15 秒发一次注释行 `: ping`。事件类型如下：
 
 - `event: track`，data 为 `Track`：任何曲目状态或字段变化时发出。
-- `event: job`，data 为 `Job`：进度变化时发出，同一任务每秒最多 4 次。
-- `event: playlist`，data 为 `Playlist`：counts 变化时发出。
+- `event: job`，data 为 `Job`：进度变化时发出。
+- `event: playlist`，data 为 `Playlist`：状态或曲目数量变化时发出，清单创建与重命名也发出；只改备注、专辑、歌词选择或歌词记录不发。counts 由 SQL 按 status 聚合计算。
+- `event: track_deleted`，data 为 `{id, playlist_id}`：歌曲从清单删除时立即发出；已排队的旧快照取消。
+- `event: playlist_deleted`，data 为 `{id}`：清单删除时立即发出；已排队的清单与所属歌曲快照取消。
 - `event: track_progress`，data 为 `{track_id, playlist_id, phase: "download" | "finishing", downloaded, total: number | null, fraction: number | null}`：单曲下载中按字节发出，同一首歌至少间隔 0.2 秒，传输完成（`fraction: 1`）必发；传输结束后、转封装 / 校验 / 写标签前发一次 `finishing`。总大小未知时 `total`、`fraction` 为 null。试听缓存不发。下载结束仍以 `track` 事件收尾。
+
+`track`、`job`、`playlist` 是状态快照，按（类型, id）合并：首条立即发出，之后 0.25 秒内同一 id 只保留最新一条，窗口结束时补发，所以同一 id 每秒最多 4 条，最后的状态一定送达。不同 id 互不影响；`track_progress` 不合并。
 
 ### 音源与设置
 | 方法 | 路径 | 说明 |

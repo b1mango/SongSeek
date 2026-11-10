@@ -180,7 +180,7 @@ class LyricsManager:
         duration = track.file.duration if track.file else chosen.duration or track.duration
         infos = {p.id: p for p in service.config.providers}
         alternatives = sorted((c for c in service.candidates(track.id) if c.id != chosen.id
-                               and infos[c.provider].enabled and same_recording(track, chosen, c)),
+                               and infos[c.provider].enabled and same_recording(chosen, c)),
                               key=lambda c: (infos[c.provider].order, c.rank))
         return self.fetch_raws(track, [service.raw_candidate(c.id) for c in [chosen] + alternatives], duration)
 

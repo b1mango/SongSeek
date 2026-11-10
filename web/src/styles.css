@@ -521,6 +521,10 @@ kbd {
 .btn.danger {
   color: var(--bad);
 }
+.btn.is-on {
+  background: var(--sleeve-2);
+  border-color: var(--ink-3);
+}
 .btn-sm {
   height: 28px;
   padding: 0 10px;
@@ -1124,6 +1128,12 @@ button.legend-item:hover {
   gap: 8px;
   flex: none;
 }
+.add-songs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
 .icon-btn.danger {
   color: var(--ink-3);
 }
@@ -1214,6 +1224,19 @@ button.legend-item:hover {
   font-weight: 600;
   font-size: 13px;
   margin-right: 6px;
+}
+.bulk-count small {
+  font-weight: 400;
+  opacity: 0.7;
+}
+.bulk-n {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 99px;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  background: color-mix(in srgb, var(--paper) 18%, transparent);
 }
 
 /* ---------- home ---------- */
@@ -1493,6 +1516,10 @@ button.legend-item:hover {
   background: var(--sleeve);
   color: var(--ink);
   box-shadow: var(--shadow);
+}
+.queue-cta {
+  margin: 0 12px 10px;
+  justify-content: center;
 }
 .queue-batch {
   display: flex;
@@ -3689,4 +3716,12 @@ tr.is-flash > td {
   font-size: 12px;
   color: var(--flow);
   white-space: nowrap;
+}
+
+.autosave {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-height: 20px;
 }

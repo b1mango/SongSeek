@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from songseek import lyrics as lyrics_module
 from songseek.downloader import digest
+from songseek.errors import SongSeekError
 from songseek.lyrics import atomic_lrc, embed_file, merge_translation, normalize_lrc
 from songseek.lrclib import LRCLib
 from songseek.models import DownloadedFile, Lyrics, LyricsInfo, LyricsResponse, ParsedRow, ProviderInfo, RawCandidate, Settings
@@ -219,7 +220,7 @@ def test_timeout_and_failed_preview_cached_as_null(service, track, monkeypatch):
 
 def test_download_saves_sidecar_after_actual_fallback(service, track, tmp_path, monkeypatch):
     alternate = add_candidate(service, track, "other", "fallback")
-    def download(target, raw, provider, playlist, on_progress=None):
+    def download(target, raw, provider, playlist, on_progress=None, **kwargs):
         if raw.provider == "mock":
             raise ValueError("first source unavailable")
         return downloaded(service, target, tmp_path).file
@@ -273,6 +274,50 @@ def test_settings_disabled_and_translation(service, track, tmp_path, monkeypatch
     assert len(calls) == before
 
 
+@pytest.mark.parametrize("failure", ["missing", "write", "exception", "embed"])
+def test_force_lyrics_failure_keeps_valid_original_with_refresh_error(service, track, tmp_path, monkeypatch, failure):
+    track = downloaded(service, track, tmp_path)
+    path = Path(track.file.path).with_suffix(".lrc")
+    path.write_text("[00:01]原歌词")
+    original = LyricsInfo(path=str(path), source="mock", source_label="原来源", synced=True, translated=True, embedded=True)
+    track.file.lyrics = original
+    service.save_track(track)
+    if failure == "missing":
+        monkeypatch.setattr(service.lyrics, "save", lambda target: LyricsInfo(source="mock", source_label="新来源", error="没有找到匹配的歌词"))
+    else:
+        monkeypatch.setattr(service.providers["mock"], "lyrics", lambda raw: Lyrics("[00:01]新歌词"))
+        def fail(*args):
+            raise OSError("private details")
+        monkeypatch.setattr(lyrics_module, "embed_file" if failure == "embed" else "atomic_lrc", fail)
+        service.config.settings.lyrics_embed = failure == "embed"
+        if failure == "exception":
+            monkeypatch.setattr(service.lyrics, "save", fail)
+    result = service.lyrics_track(track.id, force=True)
+    assert result.status == "done" and result.error is None
+    assert result.file.lyrics.model_dump(exclude={"refresh_error"}) == original.model_dump(exclude={"refresh_error"})
+    assert result.file.lyrics.refresh_error and "private" not in result.file.lyrics.refresh_error
+    if failure == "embed":
+        assert "新歌词" in path.read_text()
+    else:
+        assert path.read_text() == "[00:01]原歌词"
+    assert service.track(track.id).file.lyrics.refresh_error == result.file.lyrics.refresh_error
+    job = service.jobs.start("lyrics", track.playlist_id, force=True)
+    assert service.jobs.wait(job.id).failed == 1
+    assert service.track(track.id).file.lyrics.path == str(path)
+
+
+def test_successful_lyrics_refresh_clears_previous_refresh_error(service, track, tmp_path, monkeypatch):
+    track = downloaded(service, track, tmp_path)
+    path = Path(track.file.path).with_suffix(".lrc")
+    path.write_text("[00:01]旧歌词")
+    track.file.lyrics = LyricsInfo(path=str(path), source="mock", source_label="原来源", synced=True, refresh_error="之前更新失败")
+    service.save_track(track)
+    monkeypatch.setattr(service.providers["mock"], "lyrics", lambda raw: Lyrics("[00:01]新歌词"))
+    result = service.lyrics_track(track.id, force=True)
+    assert result.file.lyrics.refresh_error is None
+    assert "新歌词" in path.read_text()
+
+
 @pytest.mark.parametrize("extension,codec", [("mp3", "libmp3lame"), ("flac", "flac"), ("ogg", "vorbis"), ("m4a", "aac")])
 def test_embed_real_audio_tags_and_refresh_digest(tmp_path, extension, codec):
     path = tmp_path / f"audio.{extension}"
@@ -324,9 +369,10 @@ def test_api_jobs_events_csv_and_force(service, track, tmp_path, monkeypatch):
         assert len(calls) == before
         client.post(f"/api/tracks/{track.id}/lyrics")
         assert len(calls) == before
-        job = client.post(f"/api/playlists/{track.playlist_id}/lyrics").json()
-        assert job["kind"] == "lyrics" and job["total"] == 0
-        service.jobs.wait(job["id"])
+        # 契约变更：已有歌词时返回说明，不再创建 total=0 的空任务。
+        response = client.post(f"/api/playlists/{track.playlist_id}/lyrics")
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "no_eligible_tracks"
         job = client.post(f"/api/playlists/{track.playlist_id}/lyrics", json={"force": True}).json()
         final = service.jobs.wait(job["id"])
         assert final.status == "done" and final.completed == 1 and final.failed == 0
@@ -630,6 +676,13 @@ def test_batch_lyrics_obeys_track_choice(service, track, tmp_path, monkeypatch, 
     service.save_track(track)
     service.config.settings.lyrics = setting
     monkeypatch.setattr(service.providers["mock"], "lyrics", lambda raw: Lyrics("[00:01]批量"))
+    if total == 0:
+        # 契约变更：没有启用歌词的可处理歌曲时拒绝创建空任务。
+        with pytest.raises(SongSeekError) as error:
+            service.jobs.start("lyrics", track.playlist_id)
+        assert error.value.code == "no_eligible_tracks"
+        assert service.jobs.list() == []
+        return
     job = service.jobs.start("lyrics", track.playlist_id)
     assert job.total == total
     assert service.jobs.wait(job.id).failed == 0

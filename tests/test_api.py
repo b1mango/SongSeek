@@ -30,7 +30,7 @@ def test_full_mock_workflow(config):
         candidates = client.get(f"/api/tracks/{track['id']}/candidates").json()
         assert {c["verdict"] for c in candidates} == {"match", "review", "reject"}
         chosen = client.post(f"/api/tracks/{track['id']}/choose", json={"candidate_id": candidates[0]["id"]}).json()
-        assert chosen["chosen_by"] == "user"
+        assert chosen["chosen_by"] == track["chosen_by"]  # 选择当前候选是幂等操作。
         preview = client.get(candidates[0]["preview_url"], headers={"Range": "bytes=0-99"})
         assert preview.status_code == 206 and len(preview.content) == 100
         job = client.post(f"/api/playlists/{identifier}/download", json={}).json()

@@ -64,6 +64,10 @@ class SearchTrack(Model):
     providers: list[str] | None = None
 
 
+class AddTracks(Model):
+    rows: list[ParsedRow] = Field(min_length=1, max_length=5000)
+
+
 class TrackIds(Model):
     track_ids: list[int] | None = None
 
@@ -83,7 +87,7 @@ class LyricsRequest(Model):
 
 class Batch(Model):
     ids: list[int]
-    action: Literal["accept_best", "skip", "unskip", "retry"]
+    action: Literal["accept_best", "skip", "unskip", "retry", "redownload"]
 
 
 class ProviderUpdate(Model):
@@ -220,6 +224,10 @@ def create_app(config: Config | None = None, service: Service | None = None, *,
         current().delete_playlist(identifier)
         return {"ok": True}
 
+    @app.post("/api/playlists/{identifier}/tracks")
+    def add_tracks(identifier: int, body: AddTracks):
+        return current().add_tracks(identifier, body.rows)
+
     @app.get("/api/playlists/{identifier}/export.csv")
     def export_playlist(identifier: int):
         name = current().playlist(identifier).name
@@ -251,7 +259,7 @@ def create_app(config: Config | None = None, service: Service | None = None, *,
 
     @app.post("/api/tracks/batch")
     def batch(body: Batch):
-        return {"updated": current().batch(body.ids, body.action)}
+        return current().batch(body.ids, body.action)
 
     def downloaded(identifier: int) -> Path:
         track = current().track(identifier)
@@ -415,7 +423,7 @@ def create_app(config: Config | None = None, service: Service | None = None, *,
         track = service.track(chosen.track_id)
         orders = {p.id: p.order for p in service.config.providers}
         alternatives = sorted((c for c in service.candidates(track.id)
-                               if c.id != chosen.id and not c.needs_member and same_recording(track, chosen, c)),
+                               if c.id != chosen.id and not c.needs_member and same_recording(chosen, c)),
                               key=lambda c: (c.provider == chosen.provider, orders.get(c.provider, 999), c.rank))
         errors = []
         for candidate in [chosen] + alternatives[:3]:

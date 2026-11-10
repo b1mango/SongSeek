@@ -239,3 +239,10 @@ export function LrcSwitch({ on, busy = false, onToggle, title }: { on: boolean; 
 export function useLyricsDefault(): boolean {
   return useStore((s) => s.lyricsPref) ?? true;
 }
+
+/** True while the user is typing into a field, where single-key shortcuts must stay out of the way (checkboxes don't count). */
+export function isTyping(target: EventTarget | null) {
+  return (
+    target instanceof HTMLElement && (target.isContentEditable || target.matches("textarea, select, input:not([type=checkbox]):not([type=radio])"))
+  );
+}
