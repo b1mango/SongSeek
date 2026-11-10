@@ -126,9 +126,13 @@ export function RowFlow({ trackId }: { trackId: number }) {
       t += dt;
       const f = target(goal.current);
       if (f != null) shown += (f - shown) * (1 - Math.exp(-dt * 4));
+      // the dither reads better (and costs less) at ~30 fps. Keep the remainder (minus a little
+      // slack for vsync jitter) so a 60 Hz screen paints exactly every other frame; resetting to 0
+      // dropped the remainder and fell into 3-frame gaps (~24 fps).
+      const interval = 1 / 30;
       acc += dt;
-      if (acc < 1 / 30) return; // the dither reads better (and costs less) at ~30 fps
-      acc = 0;
+      if (acc < interval - 0.002) return;
+      acc = Math.min(Math.max(0, acc - interval), interval);
       paint();
     };
 
