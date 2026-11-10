@@ -285,7 +285,7 @@ export function SettingsPage() {
             <KeyRound size={17} /> 网易云 Cookie（可选）
           </h2>
           <p className="muted small">
-            填写后可以下载会员歌曲和更高音质。Cookie 只保存在本机数据目录，界面和日志都不会显示。 当前状态：
+            支持粘贴完整 Cookie 或仅粘贴 MUSIC_U；会自动提取 MUSIC_U 和可选的 __csrf，其余字段不会保存。是否能下载取决于账号权限。 当前状态：
             {settings.netease_cookie_set ? <b className="tone-text-ok">已设置</b> : <b>未设置</b>}
           </p>
           <div className="row gap-8">
@@ -293,7 +293,8 @@ export function SettingsPage() {
               className="input mono grow"
               type="password"
               autoComplete="off"
-              placeholder="粘贴 MUSIC_U=… 开头的 Cookie"
+              aria-label="网易云 Cookie"
+              placeholder="粘贴完整 Cookie，或 MUSIC_U=…"
               value={cookie}
               onChange={(e) => setCookie(e.target.value)}
             />

@@ -294,7 +294,7 @@ Token 不透明，候选保存在进程内 LRU（4096 条，2 小时 TTL），�
 | PUT | `/api/providers` | `[{id, enabled, order}]`，批量更新，返回 `Provider[]` |
 | POST | `/api/providers/health` | 同步检查全部启用的音源，每个最多 10s，返回 `Provider[]` |
 | GET | `/api/settings` | `Settings` |
-| PUT | `/api/settings` | 部分更新 `Settings`。额外字段 `netease_cookie?: string`，传空字符串表示清除。返回 `Settings` |
+| PUT | `/api/settings` | 部分更新 `Settings`。额外字段 `netease_cookie?: string`：支持单行完整 Cookie、`Cookie:` 前缀或 `MUSIC_U=…`，仅保存非空 `MUSIC_U` 和可选 `__csrf`；缺少、重复冲突或值格式错误返回 400 且保留原设置，传空字符串表示清除。返回 `Settings`，不返回 Cookie；不会验证登录或会员权限 |
 
 ### 桌面、健康检查与代理
 

@@ -96,7 +96,7 @@ Plain text is read as `title - artist` by default. `artist - title` cannot be de
 - **Jobs**: search and download share one concurrency limit, with at most two concurrent requests per source. Cancelling keeps finished songs, and interrupted songs are recovered on restart. Download progress is pushed over the SSE `track_progress` event, at most 5 times per second per song.
 - **Launch and quit**: the window opens first and the local service starts behind it to reduce macOS activation problems. Closing the window ends the process and its child processes. Interrupted songs can be retried on the next launch; audio published before its record was saved is recovered when the recorded destination and file hash can be verified.
 - **Proxy**: three modes, Auto / Manual / Off, with Auto detecting environment and system proxies. Only YouTube and the LRCLIB fallback go through the proxy. PAC is not supported.
-- **NetEase**: without a cookie only free full-length audio is tried; VIP or preview URLs are rejected explicitly. The cookie is stored in a local file with 0600 permissions, sent only to the NetEase API, and never returned by the API.
+- **NetEase**: without a cookie only free full-length audio is tried; VIP or preview URLs are rejected explicitly. Paste the full cookie or `MUSIC_U=…`; only the login cookie and optional CSRF token are kept locally with 0600 permissions. Playback depends on NetEase account permissions.
 - **Security**: intended for a single local user. Uploads are capped at 20 MB and XLSX decompression at 100 MB; CSV export neutralises formula prefixes.
 
 </details>

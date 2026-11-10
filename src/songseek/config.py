@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import string
 import tempfile
 import threading
@@ -17,6 +18,27 @@ PROVIDERS = [
     ProviderInfo(id="bilibili", label="哔哩哔哩", max_quality="160k AAC", order=4),
     ProviderInfo(id="youtube", label="YouTube", max_quality="不定", needs="proxy", order=5),
 ]
+
+
+def netease_cookie_header(cookie: str) -> str:
+    """Extract the login and optional CSRF cookies without retaining unrelated account data."""
+    if any(ord(char) < 32 or ord(char) == 127 for char in cookie):
+        raise SongSeekError("Cookie 不能包含换行或控制字符，请粘贴单行内容", "invalid_settings")
+    values: dict[str, str] = {}
+    for item in cookie.split(";"):
+        key, separator, value = item.strip().partition("=")
+        key = re.sub(r"^cookie\s*:\s*", "", key.strip(), flags=re.IGNORECASE)
+        if not separator or key not in ("MUSIC_U", "__csrf"):
+            continue
+        value = value.strip()
+        if not re.fullmatch(r"[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]+", value):
+            raise SongSeekError(f"{key} 的值为空或格式不正确，请重新复制 Cookie", "invalid_settings")
+        if key in values and values[key] != value:
+            raise SongSeekError(f"检测到多个不同的 {key}，请只粘贴同一条 Cookie", "invalid_settings")
+        values[key] = value
+    if "MUSIC_U" not in values:
+        raise SongSeekError("没有找到 MUSIC_U，请复制网易云登录后的 Cookie", "invalid_settings")
+    return "; ".join(f"{key}={values[key]}" for key in ("MUSIC_U", "__csrf") if key in values)
 
 
 def atomic_json(path: Path, value: object) -> None:
@@ -86,9 +108,10 @@ class Config:
                 raise SongSeekError("输出目录不能为空", "invalid_settings")
             settings.output_dir = str(Path(settings.output_dir).expanduser().resolve())
             if cookie is not None:
-                if not isinstance(cookie, str) or "\n" in cookie or "\r" in cookie:
+                if not isinstance(cookie, str):
                     raise SongSeekError("Cookie 格式不正确", "invalid_settings")
                 if cookie:
+                    cookie = netease_cookie_header(cookie)
                     fd, temporary = tempfile.mkstemp(dir=self.home, prefix=".cookie-")
                     try:
                         with os.fdopen(fd, "w", encoding="utf-8") as stream:
