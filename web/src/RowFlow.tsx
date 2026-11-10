@@ -20,8 +20,8 @@ export function RowFlow({ trackId }: { trackId: number }) {
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let w = 0;
     let h = 0;
-    let dot = "#7b4fd8";
-    let wash = "#ebe2fb";
+    let dot = "#bd5230";
+    let wash = "#f9e1d4";
     let clear = "rgba(235, 226, 251, 0)";
 
     const readColors = () => {

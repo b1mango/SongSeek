@@ -24,8 +24,9 @@
   --info-soft: #dfe8f3;
   --miss: #7a5aa6;
   --miss-soft: #ece4f4;
-  --flow: #7b4fd8;
-  --flow-soft: #ebe2fb;
+  /* download dot-matrix: Claude orange in light, ultracode purple in dark (code-primitives ui/dot-matrix-flow, palette "claude") */
+  --flow: #bd5230;
+  --flow-soft: #f9e1d4;
   --idle: #8a8174;
   --idle-soft: #ece6da;
 
