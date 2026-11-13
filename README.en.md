@@ -49,7 +49,7 @@
 Download an installer from [GitHub Releases](https://github.com/b1mango/SongSeek/releases), or build it as described under Development.
 
 - **macOS (Apple Silicon)**: open `觅音-<version>-mac-arm64.dmg` and drag 觅音 into Applications. The app is not notarized, so on first launch right-click 觅音 in Finder and choose Open.
-- **Windows**: build on Windows x64, unzip and run `SongSeek.exe`. Requires the Microsoft Edge WebView2 Runtime.
+- **Windows (x64)**: unzip `SongSeek-<version>-windows-x64.zip` and run `SongSeek.exe`. Requires the Microsoft Edge WebView2 Runtime.
 
 Data lives in `~/Library/Application Support/SongSeek` on macOS, `%APPDATA%\SongSeek` on Windows and `~/.local/share/songseek` on Linux; override it with `SONGSEEK_HOME`. Logs are in `logs/app.log` inside the data directory. The service only listens on the loopback address.
 

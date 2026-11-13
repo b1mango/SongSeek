@@ -47,7 +47,7 @@
 从 [GitHub Releases](https://github.com/b1mango/SongSeek/releases) 下载已发布的安装包；也可按下方「开发」自行构建。
 
 - **macOS（Apple Silicon）**：打开 `觅音-<版本>-mac-arm64.dmg`，将「觅音」拖入 Applications。应用未公证，首次启动在 Finder 中右键「觅音」→「打开」。
-- **Windows**：可在 Windows x64 上自行构建，解压 ZIP 后运行 `SongSeek.exe`，需要 Microsoft Edge WebView2 Runtime。
+- **Windows（x64）**：解压 `SongSeek-<版本>-windows-x64.zip` 后运行 `SongSeek.exe`，需要 Microsoft Edge WebView2 Runtime。
 
 数据默认位于 macOS `~/Library/Application Support/SongSeek`、Windows `%APPDATA%\SongSeek`、Linux `~/.local/share/songseek`，可用 `SONGSEEK_HOME` 覆盖；日志在数据目录 `logs/app.log`。服务只监听本机回环地址。
 
