@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from songseek.errors import SongSeekError
-from songseek.media_url import PublicNetworkBackend, secure_media_client, validate_url
+from songseek.media_url import PinnedProxyTransport, PublicNetworkBackend, secure_media_client, validate_url
 
 
 @pytest.mark.parametrize("url", [
@@ -145,6 +145,7 @@ def test_youtube_actual_proxy_redirects(tmp_path, monkeypatch, scheme, location,
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     tls.load_cert_chain(cert, key)
     seen = []
+    monkeypatch.setattr(PinnedProxyTransport, "_resolve", lambda self, host, timeout: ["8.8.8.8" if host.startswith("r1.") else "1.1.1.1"])
 
     def read_exact(sock, count):
         data = b""
@@ -170,9 +171,13 @@ def test_youtube_actual_proxy_redirects(tmp_path, monkeypatch, scheme, location,
                 read_exact(sock, count)
                 sock.sendall(b"\x05\x00")
                 version, command, _, atyp = read_exact(sock, 4)
-                assert (version, command, atyp) == (5, 1, 3)
-                length = read_exact(sock, 1)[0]
-                host = read_exact(sock, length).decode()
+                assert (version, command) == (5, 1)
+                if atyp == 1:
+                    host = socket.inet_ntoa(read_exact(sock, 4))
+                else:
+                    assert atyp == 3
+                    length = read_exact(sock, 1)[0]
+                    host = read_exact(sock, length).decode()
                 port = int.from_bytes(read_exact(sock, 2), "big")
                 target = f"{host}:{port}"
                 sock.sendall(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
@@ -181,7 +186,8 @@ def test_youtube_actual_proxy_redirects(tmp_path, monkeypatch, scheme, location,
                 request = b""
                 while b"\r\n\r\n" not in request:
                     request += connection.recv(4096)
-                if target.startswith("r1."):
+                assert b"Host: r" in request
+                if target.startswith("8.8.8.8:"):
                     response = f"HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".encode()
                 else:
                     response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
@@ -214,7 +220,7 @@ def test_youtube_actual_proxy_redirects(tmp_path, monkeypatch, scheme, location,
         finally:
             server.shutdown()
             thread.join()
-    assert seen == (["r1.googlevideo.com:443", "r2.googlevideo.com:443"] if allowed else ["r1.googlevideo.com:443"])
+    assert seen == (["8.8.8.8:443", "1.1.1.1:443"] if allowed else ["8.8.8.8:443"])
 
 
 def test_connect_timeout_falls_back_with_shared_budget(monkeypatch):
@@ -290,3 +296,22 @@ def test_direct_tls_checks_original_hostname(tmp_path, monkeypatch):
         finally:
             server.shutdown()
             thread.join()
+
+
+def test_proxy_dns_filters_private_answers(monkeypatch):
+    transport = PinnedProxyTransport(httpx.HTTPTransport(proxy="http://127.0.0.1:7897"))
+    def response(*args):
+        return httpx.Response(200, json={"Status": 0, "Answer": [
+            {"type": 1, "data": "10.0.0.1"}, {"type": 1, "data": "8.8.8.8"},
+            {"type": 1, "data": "169.254.169.254"}]})
+    monkeypatch.setattr(transport, "_request_ip", response)
+    assert transport._resolve("r1.googlevideo.com", {}) == ["8.8.8.8"]
+    transport.close()
+
+
+def test_proxy_dns_private_only_fails(monkeypatch):
+    transport = PinnedProxyTransport(httpx.HTTPTransport(proxy="http://127.0.0.1:7897"))
+    monkeypatch.setattr(transport, "_request_ip", lambda *a: httpx.Response(200, json={"Status": 0, "Answer": [{"type": 1, "data": "127.0.0.1"}]}))
+    with pytest.raises(SongSeekError):
+        transport._resolve("r1.googlevideo.com", {})
+    transport.close()

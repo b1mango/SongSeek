@@ -137,22 +137,138 @@ def validate_youtube_proxy_url(url: str) -> str:
     return url
 
 
+class PinnedTLSContext:
+    """Override only the target tunnel's TLS hostname, retaining its context."""
+    def __init__(self, context, hostname):
+        self.context = context
+        self.hostname = hostname
+
+    def set_alpn_protocols(self, protocols):
+        self.context.set_alpn_protocols(protocols)
+
+    def wrap_socket(self, sock, *args, **kwargs):
+        kwargs["server_hostname"] = self.hostname
+        return self.context.wrap_socket(sock, *args, **kwargs)
+
+    def wrap_bio(self, incoming, outgoing, *args, **kwargs):
+        kwargs["server_hostname"] = self.hostname
+        return self.context.wrap_bio(incoming, outgoing, *args, **kwargs)
+
+
+class PinnedProxyTransport(httpx.BaseTransport):
+    """Resolve through authenticated DNS-over-HTTPS and tunnel to a public IP."""
+    def __init__(self, transport):
+        self.transport = transport
+        self.pool = transport._pool
+
+    def _make_pool(self, hostname):
+        p = self.pool
+        options = dict(proxy_url=p._proxy_url, ssl_context=PinnedTLSContext(p._ssl_context, hostname),
+                       max_connections=p._max_connections, max_keepalive_connections=p._max_keepalive_connections,
+                       keepalive_expiry=p._keepalive_expiry, http1=p._http1, http2=p._http2,
+                       network_backend=p._network_backend)
+        if type(p) is httpcore.HTTPProxy:
+            return httpcore.HTTPProxy(**options, proxy_headers=p._proxy_headers, proxy_ssl_context=p._proxy_ssl_context)
+        return httpcore.SOCKSProxy(**options, proxy_auth=p._proxy_auth)
+
+    def _request_ip(self, request, ip, hostname):
+        transport = httpx.HTTPTransport()
+        transport._pool.close()
+        transport._pool = self._make_pool(hostname)
+        try:
+            url = request.url.copy_with(host=ip)
+            extensions = dict(request.extensions, sni_hostname=hostname)
+            outgoing = httpx.Request(request.method, url, headers=request.headers, stream=request.stream, extensions=extensions)
+            response = transport.handle_request(outgoing)
+        except BaseException:
+            transport.close()
+            raise
+        response.stream = ClosingStream(response.stream, transport)
+        return response
+
+    def _resolve(self, host, timeout):
+        # Bootstrap DNS-over-HTTPS using a fixed public Google DNS address; the
+        # TLS certificate is validated for dns.google, not the numeric address.
+        target = httpx.Request("GET", "https://dns.google/resolve", params={"name": host, "type": "A"},
+                               extensions={"timeout": timeout})
+        response = self._request_ip(target, "8.8.8.8", "dns.google")
+        try:
+            response.read()
+            if response.status_code != 200:
+                raise invalid_url()
+            data = response.json()
+        finally:
+            response.close()
+        if data.get("Status") != 0 or data.get("TC"):
+            raise invalid_url()
+        safe = []
+        for answer in data.get("Answer", []):
+            if answer.get("type") != 1:
+                continue
+            try:
+                ip = ipaddress.ip_address(answer.get("data", ""))
+            except ValueError:
+                continue
+            if public_ip(ip) and str(ip) not in safe:
+                safe.append(str(ip))
+        if not safe:
+            raise invalid_url()
+        return safe
+
+    def handle_request(self, request):
+        validate_youtube_proxy_url(str(request.url))
+        timeout = request.extensions.get("timeout", {})
+        connect = timeout.get("connect")
+        deadline = None if connect is None else time.monotonic() + connect
+        addresses = self._resolve(request.url.host, timeout)
+        last = None
+        for index, ip in enumerate(addresses):
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                raise httpx.ConnectTimeout("Proxy media connection timed out", request=request)
+            request.extensions["timeout"] = dict(timeout, connect=None if remaining is None else remaining / (len(addresses) - index))
+            try:
+                return self._request_ip(request, ip, request.url.host)
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ProxyError) as error:
+                last = error
+        raise last or invalid_url()
+
+    def close(self):
+        self.transport.close()
+
+
+class ClosingStream(httpx.SyncByteStream):
+    def __init__(self, stream, transport):
+        self.stream = stream
+        self.transport = transport
+
+    def __iter__(self):
+        yield from self.stream
+
+    def close(self):
+        try:
+            self.stream.close()
+        finally:
+            self.transport.close()
+
+
 def secure_media_client(client: httpx.Client, provider_id: str = "") -> httpx.Client:
-    """Install per-hop validation and guard real direct connections, retaining mocks."""
-    proxied = False
-    transports = [client._transport, *client._mounts.values()]
-    for transport in transports:
+    """Install per-hop validation and guard real connections, retaining mocks."""
+    def guard(transport):
         if transport is None or isinstance(transport, httpx.MockTransport):
-            continue
+            return transport
         if not isinstance(transport, httpx.HTTPTransport):
             raise invalid_url()
         pool = transport._pool
-        if type(pool) is not httpcore.ConnectionPool:
-            if provider_id != "youtube" or type(pool) not in (httpcore.HTTPProxy, httpcore.SOCKSProxy):
-                raise SongSeekError("代理媒体连接无法验证目标地址，请关闭代理后重试", "unsafe_media_proxy")
-            proxied = True
-        else:
+        if type(pool) is httpcore.ConnectionPool:
             pool._network_backend = PublicNetworkBackend(pool._network_backend)
-    validator = validate_youtube_proxy_url if proxied else validate_url
-    client.event_hooks["request"].append(lambda request: validator(str(request.url)))
+            return transport
+        if provider_id != "youtube" or type(pool) not in (httpcore.HTTPProxy, httpcore.SOCKSProxy):
+            raise SongSeekError("代理媒体连接无法验证目标地址，请关闭代理后重试", "unsafe_media_proxy")
+        return PinnedProxyTransport(transport)
+
+    client._transport = guard(client._transport)
+    for pattern, transport in client._mounts.items():
+        client._mounts[pattern] = guard(transport)
+    client.event_hooks["request"].append(lambda request: validate_url(str(request.url)))
     return client
