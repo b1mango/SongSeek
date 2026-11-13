@@ -1,6 +1,8 @@
 """Guard network connections made for untrusted audio and cover URLs."""
 import ipaddress
 import socket
+import threading
+import time
 from urllib.parse import urlsplit
 
 import httpcore
@@ -45,15 +47,44 @@ def public_ip(address):
     return address.is_global and not (address.is_multicast or address.is_unspecified or address.is_loopback or address.is_link_local)
 
 
+_dns_slots = threading.BoundedSemaphore(16)
+
+
+def resolve_addresses(host, port, timeout):
+    # getaddrinfo has no portable timeout; cap outstanding abandoned lookups.
+    if not _dns_slots.acquire(blocking=False):
+        raise httpcore.ConnectTimeout("DNS resolver busy")
+    done = threading.Event()
+    result = []
+
+    def resolve():
+        try:
+            result.append(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+        except OSError as error:
+            result.append(error)
+        finally:
+            _dns_slots.release()
+            done.set()
+
+    try:
+        threading.Thread(target=resolve, daemon=True).start()
+    except BaseException:
+        _dns_slots.release()
+        raise
+    if not done.wait(timeout):
+        raise httpcore.ConnectTimeout("DNS resolution timed out")
+    if isinstance(result[0], OSError):
+        raise httpcore.ConnectError(str(result[0])) from result[0]
+    return result[0]
+
+
 class PublicNetworkBackend(httpcore.NetworkBackend):
     def __init__(self, backend):
         self.backend = backend
 
     def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
-        try:
-            addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-        except OSError as error:
-            raise httpcore.ConnectError(str(error)) from error
+        deadline = None if timeout is None else time.monotonic() + timeout
+        addresses = resolve_addresses(host, port, timeout)
         safe = []
         for family, _, _, _, sockaddr in addresses:
             try:
@@ -65,10 +96,14 @@ class PublicNetworkBackend(httpcore.NetworkBackend):
         if not safe:
             raise invalid_url()
         last_error = None
-        for ip in safe:
+        for index, ip in enumerate(safe):
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                raise httpcore.ConnectTimeout("Connection timed out")
+            per_address = None if remaining is None else remaining / (len(safe) - index)
             try:
-                stream = self.backend.connect_tcp(ip, port, timeout, local_address, socket_options)
-            except httpcore.ConnectError as error:
+                stream = self.backend.connect_tcp(ip, port, per_address, local_address, socket_options)
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as error:
                 last_error = error
                 continue
             try:
@@ -91,9 +126,20 @@ class PublicNetworkBackend(httpcore.NetworkBackend):
         self.backend.sleep(seconds)
 
 
-def secure_media_client(client: httpx.Client) -> httpx.Client:
+def validate_youtube_proxy_url(url: str) -> str:
+    validate_url(url)
+    parts = urlsplit(url)
+    host = parts.hostname.lower()
+    domains = ("googlevideo.com", "ytimg.com", "youtube.com")
+    if (parts.scheme != "https" or parts.port not in (None, 443)
+            or not any(host == domain or host.endswith("." + domain) for domain in domains)):
+        raise SongSeekError("代理媒体地址不属于允许的 YouTube 域名", "unsafe_media_proxy")
+    return url
+
+
+def secure_media_client(client: httpx.Client, provider_id: str = "") -> httpx.Client:
     """Install per-hop validation and guard real direct connections, retaining mocks."""
-    client.event_hooks["request"].append(lambda request: validate_url(str(request.url)))
+    proxied = False
     transports = [client._transport, *client._mounts.values()]
     for transport in transports:
         if transport is None or isinstance(transport, httpx.MockTransport):
@@ -101,8 +147,12 @@ def secure_media_client(client: httpx.Client) -> httpx.Client:
         if not isinstance(transport, httpx.HTTPTransport):
             raise invalid_url()
         pool = transport._pool
-        # Proxy pools resolve or connect to the target outside our control.
         if type(pool) is not httpcore.ConnectionPool:
-            raise SongSeekError("代理媒体连接无法验证目标地址，请关闭代理后重试", "unsafe_media_proxy")
-        pool._network_backend = PublicNetworkBackend(pool._network_backend)
+            if provider_id != "youtube" or type(pool) not in (httpcore.HTTPProxy, httpcore.SOCKSProxy):
+                raise SongSeekError("代理媒体连接无法验证目标地址，请关闭代理后重试", "unsafe_media_proxy")
+            proxied = True
+        else:
+            pool._network_backend = PublicNetworkBackend(pool._network_backend)
+    validator = validate_youtube_proxy_url if proxied else validate_url
+    client.event_hooks["request"].append(lambda request: validator(str(request.url)))
     return client

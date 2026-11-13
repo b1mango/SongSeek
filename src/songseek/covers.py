@@ -35,7 +35,7 @@ def fetch_cover(url: str, provider: BaseProvider) -> tuple[bytes, str] | None:
     try:
         started = time.monotonic()
         with provider.client(timeout=TIMEOUT) as client:
-            secure_media_client(client)
+            secure_media_client(client, provider.id)
             with client.stream("GET", audio_url(url)) as response:
                 response.raise_for_status()
                 if int(response.headers.get("content-length", 0)) > MAX_SIZE:

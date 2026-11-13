@@ -95,7 +95,7 @@ def transfer(source: AudioSource, target: Path, provider: BaseProvider, max_size
     started = time.monotonic()
     headers = provider.headers() | source.headers
     with provider.semaphore, provider.client(timeout=30) as client:
-        secure_media_client(client)
+        secure_media_client(client, provider.id)
         with client.stream("GET", source.url, headers=headers) as response:
             response.raise_for_status()
             content_type = response.headers.get("content-type", "")

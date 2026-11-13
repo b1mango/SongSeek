@@ -385,7 +385,7 @@ def create_app(config: Config | None = None, service: Service | None = None, *,
         try:
             resources.enter_context(provider.slot())
             client = resources.enter_context(provider.client(timeout=provider.remaining(30)))
-            secure_media_client(client)
+            secure_media_client(client, provider.id)
             upstream_headers = provider.headers() | source.headers
             if request.headers.get("range"):
                 upstream_headers["Range"] = request.headers["range"]
