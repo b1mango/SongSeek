@@ -373,6 +373,8 @@ def test_artist_provider_http(catalog, monkeypatch, kind):
     songs = provider.artist_songs(artist)
     assert songs[0].title == "晴天" and songs[0].duration == 269
     assert len(seen) == 2
+    if kind == "kugou":
+        assert all(request.url.scheme == "https" and request.url.host == "mobiles.kugou.com" for request in seen)
 
 
 def test_merge_demotes_featured_and_drops_ensembles():

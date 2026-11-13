@@ -35,7 +35,7 @@ class KugouProvider(BaseProvider):
         return parse_search(self.request("GET", "https://songsearch.kugou.com/song_search_v2", params={"keyword": query, "page": 1, "pagesize": limit}))[:limit]
 
     def artist_lookup(self, query: str) -> dict | None:
-        data = self.request("GET", "http://mobilecdn.kugou.com/api/v3/search/singer",
+        data = self.request("GET", "https://mobiles.kugou.com/api/v3/search/singer",
                             params={"keyword": query, "pagesize": 5}, timeout=.8)
         for artist in data.get("data", []):
             if key(query) == key(artist["singername"]):
@@ -44,7 +44,7 @@ class KugouProvider(BaseProvider):
         return None
 
     def artist_songs(self, artist: dict) -> list[RawCandidate]:
-        data = self.request("GET", "http://mobilecdn.kugou.com/api/v3/singer/song", params={
+        data = self.request("GET", "https://mobiles.kugou.com/api/v3/singer/song", params={
             "singerid": artist["id"], "page": 1, "pagesize": 100, "sorttype": 2})
         if data.get("status") != 1:
             raise SongSeekError("酷狗歌手热门歌曲获取失败", "provider_error")
