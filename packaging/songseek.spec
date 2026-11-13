@@ -5,7 +5,7 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metada
 
 root = Path(SPECPATH).parent
 cache = root / '.build-cache'
-version = tomllib.loads((root / 'pyproject.toml').read_text())['project']['version']
+version = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version']
 mac = sys.platform == 'darwin'
 datas = [(str(root / 'web' / 'dist'), 'web/dist'), (str(cache / 'THIRD_PARTY.md'), '.')]
 datas += copy_metadata('songseek')

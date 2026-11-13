@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "songseek"
-version = "0.1.0"
+version = "0.0.1"
 description = "觅音：本地多音源歌曲检索、审核与下载"
 readme = "README.md"
 requires-python = ">=3.12"

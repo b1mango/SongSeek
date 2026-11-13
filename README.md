@@ -7,7 +7,7 @@
 <p align="center">觅音：导入歌单，多音源检索、审核，一键下载成带标签和歌词的本地曲库</p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.0-2ea043" alt="version 0.1.0" />
+  <img src="https://img.shields.io/badge/version-0.0.1-2ea043" alt="version 0.0.1" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-1f6feb" alt="macOS and Windows" />
   <a href="#license"><img src="https://img.shields.io/badge/license-pending-f5c542" alt="license pending" /></a>
 </p>
@@ -21,7 +21,7 @@
 - 按歌名、歌手、时长、版本（现场 / 伴奏等）、音质与热度打分，自动选出最佳候选
 - 低把握的歌曲进入审核页，可试听候选、手动选择或换关键词重搜
 - 批量下载并校验时长与完整解码，写入标签和专辑封面，同内容文件自动去重
-- 下载中的歌曲整行化为紫色点阵粒子进度，实时显示百分比或已下载大小
+- 下载中的歌曲整行显示点阵粒子进度，浅色主题为橙色、深色主题为紫色，并实时显示百分比或已下载大小
 - 清单按状态一键筛选（未找到、下载失败等各有颜色），筛选与查找栏滚动时常驻顶部，勾选后底部浮出批量操作
 - 往已有清单追加歌曲并跳过重复项；区分音源连接失败和没有找到歌曲
 - 下载文件被移动或删除后，可按原候选重新下载；中断后尝试恢复已发布的音频记录
@@ -44,10 +44,10 @@
 
 ## 安装
 
-尚未发布 GitHub Release，可按下方「开发」自行构建。
+从 [GitHub Releases](https://github.com/b1mango/SongSeek/releases) 下载已发布的安装包；也可按下方「开发」自行构建。
 
 - **macOS（Apple Silicon）**：打开 `觅音-<版本>-mac-arm64.dmg`，将「觅音」拖入 Applications。应用未公证，首次启动在 Finder 中右键「觅音」→「打开」。
-- **Windows**：解压 ZIP 后运行 `SongSeek.exe`，需要 Microsoft Edge WebView2 Runtime。
+- **Windows**：可在 Windows x64 上自行构建，解压 ZIP 后运行 `SongSeek.exe`，需要 Microsoft Edge WebView2 Runtime。
 
 数据默认位于 macOS `~/Library/Application Support/SongSeek`、Windows `%APPDATA%\SongSeek`、Linux `~/.local/share/songseek`，可用 `SONGSEEK_HOME` 覆盖；日志在数据目录 `logs/app.log`。服务只监听本机回环地址。
 

@@ -7,7 +7,7 @@
 <p align="center">Import a playlist, search many sources, review the matches, and download a tagged local library with lyrics in one go</p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.0-2ea043" alt="version 0.1.0" />
+  <img src="https://img.shields.io/badge/version-0.0.1-2ea043" alt="version 0.0.1" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-1f6feb" alt="macOS and Windows" />
   <a href="#license"><img src="https://img.shields.io/badge/license-pending-f5c542" alt="license pending" /></a>
 </p>
@@ -23,7 +23,7 @@
 - Scores title, artist, duration, version (live, instrumental, …), quality and popularity, then picks the best candidate automatically
 - Low-confidence songs go to a review page where you can preview candidates, pick one by hand, or search again with other keywords
 - Batch download with duration and full-decode checks, tags and album art written, identical files deduplicated
-- A downloading song's whole row turns into a purple dot-matrix progress field, with live percent or bytes downloaded
+- A downloading song's whole row displays dot-matrix progress in orange for the light theme and purple for the dark theme, with live percent or bytes downloaded
 - One-click status filters (not found, failed, … each with its own colour); the filter and search bar stays pinned while scrolling, and a bulk-action bar floats up when songs are selected
 - Append songs to an existing playlist with duplicate detection; distinguish source connection failures from songs not found
 - Redownload moved or deleted files from the selected candidate, and recover eligible published audio records after an interruption
@@ -46,10 +46,10 @@
 
 ## Install
 
-There is no GitHub Release yet; build it yourself as described under Development.
+Download an installer from [GitHub Releases](https://github.com/b1mango/SongSeek/releases), or build it as described under Development.
 
 - **macOS (Apple Silicon)**: open `觅音-<version>-mac-arm64.dmg` and drag 觅音 into Applications. The app is not notarized, so on first launch right-click 觅音 in Finder and choose Open.
-- **Windows**: unzip and run `SongSeek.exe`. Requires the Microsoft Edge WebView2 Runtime.
+- **Windows**: build on Windows x64, unzip and run `SongSeek.exe`. Requires the Microsoft Edge WebView2 Runtime.
 
 Data lives in `~/Library/Application Support/SongSeek` on macOS, `%APPDATA%\SongSeek` on Windows and `~/.local/share/songseek` on Linux; override it with `SONGSEEK_HOME`. Logs are in `logs/app.log` inside the data directory. The service only listens on the loopback address.
 

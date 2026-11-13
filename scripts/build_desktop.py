@@ -3,7 +3,6 @@ import hashlib
 import json
 import os
 import platform
-import re
 import shlex
 import shutil
 import subprocess
@@ -16,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / ".build-cache"
-VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 MAC_VERSION = "9.0.2"
 MAC_SOURCE = f"https://ffmpeg.org/releases/ffmpeg-{MAC_VERSION}.tar.xz"
 MAC_SHA256 = "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"
@@ -40,7 +39,8 @@ MAC_FLAGS = [
     "--enable-bsf=aac_adtstoasc", "--enable-protocol=file,pipe",
     "--enable-filter=aresample,anull",
 ]
-WIN_SOURCE = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+WIN_SOURCE = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-essentials_build.zip"
+WIN_SHA256 = "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba"
 
 
 def run(*args, cwd=ROOT):
@@ -53,18 +53,6 @@ def download(url, path):
     temporary = path.with_suffix(path.suffix + ".part")
     run("curl.exe" if sys.platform == "win32" else "curl", "--fail", "--location", "--retry", "3", "--max-time", "600", "--silent", "--show-error", url, "-o", temporary)
     temporary.replace(path)
-
-
-def archive(url, filename):
-    path = CACHE / filename
-    checksum = CACHE / (filename + ".sha256")
-    download(url + ".sha256", checksum)
-    download(url, path)
-    expected = re.search(r"\b[0-9a-fA-F]{64}\b", checksum.read_text()).group().lower()
-    actual = hashlib.file_digest(path.open("rb"), "sha256").hexdigest()
-    if actual != expected:
-        raise RuntimeError(f"SHA256 mismatch: {filename}; remove the cached download and retry")
-    return path, actual
 
 
 def source_archive(url, digest):
@@ -123,12 +111,12 @@ def prepare_tools():
             raise RuntimeError("macOS build requires Apple Silicon")
         records = build_mac_tools(directory)
     elif sys.platform == "win32":
-        path, digest = archive(WIN_SOURCE, "windows-ffmpeg-essentials.zip")
+        path = source_archive(WIN_SOURCE, WIN_SHA256)
         with zipfile.ZipFile(path) as bundle:
             for tool in ("ffmpeg.exe", "ffprobe.exe"):
                 entry = next(item for item in bundle.namelist() if Path(item).name == tool)
                 (directory / tool).write_bytes(bundle.read(entry))
-        records.append({"url": WIN_SOURCE, "sha256": digest})
+        records.append({"url": WIN_SOURCE, "sha256": WIN_SHA256})
     else:
         raise RuntimeError("Packaging supports macOS arm64 and Windows x64")
     versions = []
@@ -140,9 +128,9 @@ def prepare_tools():
             linked = subprocess.check_output(["otool", "-L", str(executable)], text=True)
             if any(not line.strip().startswith(("/usr/lib/", "/System/Library/")) for line in linked.splitlines()[1:]):
                 raise RuntimeError("FFmpeg has non-system dynamic dependencies")
-    notice = (ROOT / "packaging" / "THIRD_PARTY.md").read_text()
+    notice = (ROOT / "packaging" / "THIRD_PARTY.md").read_text(encoding="utf-8")
     notice += "\n## Build provenance\n\n```json\n" + json.dumps(records, indent=2) + "\n```\n\n```text\n" + "\n".join(versions) + "\n```\n"
-    (CACHE / "THIRD_PARTY.md").write_text(notice)
+    (CACHE / "THIRD_PARTY.md").write_text(notice, encoding="utf-8")
 
 
 def prepare_icons():
@@ -152,7 +140,7 @@ def prepare_icons():
     if not svg.exists():
         raise RuntimeError("packaging/icon.svg is required")
     png = CACHE / "icon.png"
-    png.write_bytes(svg_to_bytes(svg_string=svg.read_text(), width=1024, height=1024))
+    png.write_bytes(svg_to_bytes(svg_string=svg.read_text(encoding="utf-8"), width=1024, height=1024))
     with Image.open(png) as art:
         art.save(CACHE / "icon.ico", sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
         if sys.platform == "darwin":
