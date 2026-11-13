@@ -2,23 +2,20 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from urllib.parse import urlsplit
 
 import httpx
 
 from ..config import Config
 from ..netproxy import effective_proxy
-from ..errors import SongSeekError, public_error
+from ..errors import public_error
 from ..models import AudioSource, Health, Lyrics, RawCandidate, now
+from ..media_url import validate_url
 
 USER_AGENT = "Mozilla/5.0 (SongSeek local music tool)"
 
 
 def audio_url(url: str) -> str:
-    parsed = urlsplit(url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
-        raise SongSeekError("音源未返回有效音频地址", "invalid_audio_url")
-    return url
+    return validate_url(url)
 
 
 class BaseProvider(ABC):

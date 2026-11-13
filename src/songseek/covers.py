@@ -10,6 +10,7 @@ from mutagen.mp4 import MP4
 
 from .errors import SongSeekError
 from .matching import same_recording
+from .media_url import secure_media_client
 from .providers.base import BaseProvider, audio_url
 
 MAX_SIZE = 5 * 1024 * 1024
@@ -34,6 +35,7 @@ def fetch_cover(url: str, provider: BaseProvider) -> tuple[bytes, str] | None:
     try:
         started = time.monotonic()
         with provider.client(timeout=TIMEOUT) as client:
+            secure_media_client(client)
             with client.stream("GET", audio_url(url)) as response:
                 response.raise_for_status()
                 if int(response.headers.get("content-length", 0)) > MAX_SIZE:

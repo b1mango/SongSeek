@@ -29,6 +29,7 @@ from .covers import fetch_cover, image_type
 from .tools import require_tool
 from .errors import SongSeekError, storage_error
 from .models import AudioSource, DownloadedFile, RawCandidate, Track
+from .media_url import secure_media_client
 from .normalize import tolerance
 from .providers.base import BaseProvider, audio_url
 
@@ -94,6 +95,7 @@ def transfer(source: AudioSource, target: Path, provider: BaseProvider, max_size
     started = time.monotonic()
     headers = provider.headers() | source.headers
     with provider.semaphore, provider.client(timeout=30) as client:
+        secure_media_client(client)
         with client.stream("GET", source.url, headers=headers) as response:
             response.raise_for_status()
             content_type = response.headers.get("content-type", "")

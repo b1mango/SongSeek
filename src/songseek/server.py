@@ -21,6 +21,7 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import iterate_in_threadpool
 from starlette.exceptions import HTTPException
 
+from .media_url import secure_media_client
 from . import netproxy
 from .tools import availability, resource_dir
 from .config import Config
@@ -384,6 +385,7 @@ def create_app(config: Config | None = None, service: Service | None = None, *,
         try:
             resources.enter_context(provider.slot())
             client = resources.enter_context(provider.client(timeout=provider.remaining(30)))
+            secure_media_client(client)
             upstream_headers = provider.headers() | source.headers
             if request.headers.get("range"):
                 upstream_headers["Range"] = request.headers["range"]
