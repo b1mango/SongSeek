@@ -243,25 +243,54 @@ function PlayerBar({
   const lyrics = useLyrics(item.lyricsUrl);
   const cover = useCover(item.coverUrl);
   const [full, setFull] = useState(false);
+  const seekRef = useRef<HTMLInputElement | null>(null);
+  const lyricsRef = useRef<Lyrics | null>(null);
+  lyricsRef.current = lyrics;
+  const lastSecRef = useRef(-1);
+  const lastActiveRef = useRef(-2);
 
-  // Follow the clock every frame while playing so the progress fill and lyrics move smoothly.
+  // Write continuous progress directly to --p on the DOM slider at 60fps while playing;
+  // only commit React state when the integer second or active lyric line changes.
   useEffect(() => {
-    const sync = () => {
-      setTime(audio.currentTime);
-      setLength(isFinite(audio.duration) ? audio.duration : 0);
+    lastSecRef.current = -1;
+    lastActiveRef.current = -2;
+    const sync = (force = false) => {
+      const t = audio.currentTime;
+      const dur = isFinite(audio.duration) ? audio.duration : 0;
+      setLength((prev) => (prev === dur ? prev : dur));
+      if (seekRef.current) {
+        const p = dur ? Math.min(100, (t / dur) * 100) : 0;
+        seekRef.current.style.setProperty("--p", `${p}%`);
+        if (document.activeElement !== seekRef.current) {
+          seekRef.current.value = String(Math.min(t, dur || 1));
+        }
+      }
+      const sec = Math.floor(t);
+      const lyr = lyricsRef.current;
+      const act = lyr?.synced ? activeIndex(lyr.lines, t) : -1;
+      if (force || sec !== lastSecRef.current || act !== lastActiveRef.current) {
+        lastSecRef.current = sec;
+        lastActiveRef.current = act;
+        setTime(t);
+      }
     };
-    sync();
-    const events = ["timeupdate", "durationchange", "seeked", "emptied", "loadedmetadata"];
-    events.forEach((e) => audio.addEventListener(e, sync));
+    sync(true);
+    const onTimeUpdate = () => sync(false);
+    const onDiscrete = () => sync(true);
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    const discreteEvents = ["durationchange", "seeked", "emptied", "loadedmetadata"];
+    discreteEvents.forEach((e) => audio.addEventListener(e, onDiscrete));
     let frame = 0;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const tick = () => {
-      sync();
+      sync(false);
       frame = requestAnimationFrame(tick);
     };
-    if (playing) frame = requestAnimationFrame(tick);
+    if (playing && !reduced) frame = requestAnimationFrame(tick);
     return () => {
       cancelAnimationFrame(frame);
-      events.forEach((e) => audio.removeEventListener(e, sync));
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      discreteEvents.forEach((e) => audio.removeEventListener(e, onDiscrete));
     };
   }, [audio, playing, item.key]);
 
@@ -334,7 +363,9 @@ function PlayerBar({
           aria-label="打开播放页"
           title="打开播放页"
         >
-          <span className="disc-label" style={cover ? { backgroundImage: `url("${cover}")` } : undefined} data-cover={cover ? "" : undefined} />
+          <span className="disc-rotor" aria-hidden>
+            <span className="disc-label" style={cover ? { backgroundImage: `url("${cover}")` } : undefined} data-cover={cover ? "" : undefined} />
+          </span>
           <Maximize2 className="disc-hint" size={14} aria-hidden />
         </button>
 
@@ -359,16 +390,20 @@ function PlayerBar({
             <div className="player-progress">
               <span className="mono player-time">{fmtDuration(time)}</span>
               <input
+                ref={seekRef}
                 className="player-seek"
                 type="range"
                 min={0}
                 max={length || 1}
                 step={0.1}
-                value={Math.min(time, length || 1)}
+                defaultValue={Math.min(time, length || 1)}
                 style={{ "--p": `${pct}%` } as CSSProperties}
                 onChange={(e) => {
-                  audio.currentTime = Number(e.target.value);
-                  setTime(audio.currentTime);
+                  const next = Number(e.target.value);
+                  audio.currentTime = next;
+                  const p = length ? Math.min(100, (next / length) * 100) : 0;
+                  e.currentTarget.style.setProperty("--p", `${p}%`);
+                  setTime(next);
                 }}
                 aria-label="进度"
               />

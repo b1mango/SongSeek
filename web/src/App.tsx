@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import { CloudOff, FileUp, ListMusic, Moon, Search, Settings2, Sun, SunMoon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { CloudOff, FileUp, ListMusic, Menu, Moon, Search, Settings2, Sun, SunMoon, X } from "lucide-react";
 import { api } from "./api";
 import { ToastProvider, useToast } from "./components";
 import { TitleBar } from "./desktop";
@@ -29,16 +29,42 @@ function Shell() {
   useLiveConnection();
   const route = useRoute();
   const toast = useToast();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const routeKey = route.page === "playlist" || route.page === "review" ? `${route.page}:${route.id}:${route.page === "review" ? route.track ?? "" : ""}` : route.page;
+
   useEffect(() => {
     refreshPlaylists().catch((e) => toast("bad", e.message));
   }, [toast]);
+
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [routeKey]);
+
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawerOpen]);
 
   useJobNotices();
 
   return (
     <div className="shell">
       <TitleBar />
-      <Sidebar route={route} />
+      <MobileTopBar route={route} drawerOpen={drawerOpen} onToggle={() => setDrawerOpen((v) => !v)} />
+      {drawerOpen && (
+        <button
+          type="button"
+          className="sidebar-scrim"
+          aria-label="关闭导航菜单"
+          tabIndex={-1}
+          onClick={() => setDrawerOpen(false)}
+        />
+      )}
+      <Sidebar route={route} isOpen={drawerOpen} onNavigate={() => setDrawerOpen(false)} />
       <main className="main">
         <div className="page-enter" key={route.page === "playlist" || route.page === "review" ? `${route.page}:${route.id}` : route.page}>
           <Page route={route} />
@@ -89,7 +115,50 @@ function Page({ route }: { route: Route }) {
   }
 }
 
-function Sidebar({ route }: { route: Route }) {
+function MobileTopBar({ route, drawerOpen, onToggle }: { route: Route; drawerOpen: boolean; onToggle: () => void }) {
+  const jobs = useStore((s) => s.jobs);
+  const runningCount = jobs.filter((j) => j.status === "running").length;
+  const isHome = route.page === "home" || route.page === "playlist" || route.page === "review";
+  return (
+    <header className="mobile-topbar">
+      <button
+        type="button"
+        className="icon-btn mobile-nav-btn"
+        aria-label={drawerOpen ? "收起导航栏" : "展开导航栏"}
+        aria-expanded={drawerOpen}
+        onClick={onToggle}
+      >
+        {drawerOpen ? <X size={18} /> : <Menu size={18} />}
+      </button>
+      <a className="brand mobile-brand" href="#/">
+        <img className="brand-mark" src="./logo.svg" alt="" aria-hidden draggable={false} />
+        <span className="brand-name">觅音</span>
+      </a>
+      <nav className="mobile-quick-nav" aria-label="主导航">
+        <a className={`mobile-nav-link${isHome ? " is-active" : ""}`} href="#/">
+          清单
+        </a>
+        <a className={`mobile-nav-link${route.page === "import" ? " is-active" : ""}`} href={href({ page: "import" })}>
+          导入
+        </a>
+        <a className={`mobile-nav-link${route.page === "search" ? " is-active" : ""}`} href={href({ page: "search" })}>
+          搜索
+        </a>
+        <a className={`mobile-nav-link${route.page === "settings" ? " is-active" : ""}`} href={href({ page: "settings" })}>
+          设置
+        </a>
+      </nav>
+      {runningCount > 0 && (
+        <button type="button" className="side-pill tone-info" onClick={onToggle} title="查看进行中的任务">
+          {runningCount} 项进行中
+        </button>
+      )}
+      <ThemeToggle />
+    </header>
+  );
+}
+
+function Sidebar({ route, isOpen, onNavigate }: { route: Route; isOpen: boolean; onNavigate: () => void }) {
   const playlists = useStore((s) => s.playlists);
   const jobs = useStore((s) => s.jobs);
   const connected = useStore((s) => s.connected);
@@ -97,15 +166,15 @@ function Sidebar({ route }: { route: Route }) {
   const activeId = route.page === "playlist" || route.page === "review" ? route.id : null;
 
   const nav = (r: Route, label: string, Icon: typeof Search, active: boolean) => (
-    <a className={`nav-item${active ? " is-active" : ""}`} href={href(r)}>
+    <a className={`nav-item${active ? " is-active" : ""}`} href={href(r)} onClick={onNavigate}>
       <Icon size={16} aria-hidden />
       {label}
     </a>
   );
 
   return (
-    <aside className="sidebar">
-      <a className="brand" href="#/">
+    <aside className={`sidebar${isOpen ? " is-open" : ""}`} aria-label="侧边导航">
+      <a className="brand" href="#/" onClick={onNavigate}>
         <img className="brand-mark" src="./logo.svg" alt="" aria-hidden draggable={false} />
         <span className="brand-name">觅音</span>
         <span className="brand-en">SongSeek</span>
@@ -127,7 +196,11 @@ function Sidebar({ route }: { route: Route }) {
             const review = p.counts.needs_review;
             return (
               <li key={p.id}>
-                <a className={`side-list${activeId === p.id ? " is-active" : ""}`} href={href({ page: "playlist", id: p.id })}>
+                <a
+                  className={`side-list${activeId === p.id ? " is-active" : ""}`}
+                  href={href({ page: "playlist", id: p.id })}
+                  onClick={onNavigate}
+                >
                   <span className="side-list-name">{p.name}</span>
                   {review > 0 && (
                     <span className="side-pill tone-warn" title={`${review} 首待审核`}>
@@ -147,7 +220,7 @@ function Sidebar({ route }: { route: Route }) {
 
       <div className="side-foot">
         {running.map((j) => (
-          <JobChip key={j.id} job={j} />
+          <JobChip key={j.id} job={j} onOpen={onNavigate} />
         ))}
         {!connected && (
           <div className="offline">
@@ -188,52 +261,43 @@ function ThemeToggle() {
   );
 }
 
-function JobChip({ job }: { job: Job }) {
+function JobChip({ job, onOpen }: { job: Job; onOpen: () => void }) {
   const toast = useToast();
   const pct = job.total ? Math.round((job.completed / job.total) * 100) : 0;
   const open = () => {
-    // jobs without a playlist come from 单曲搜索
+    onOpen();
     if (job.playlist_id == null) return navigate({ page: "search" });
     requestJobFocus(job.playlist_id);
     navigate({ page: "playlist", id: job.playlist_id });
   };
   return (
-    <div
-      className="job-chip"
-      role="button"
-      tabIndex={0}
-      title="查看进度"
-      onClick={open}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          open();
-        }
-      }}
-    >
+    <div className="job-chip">
       <div className="job-chip-head">
-        <span>{job.kind === "search" ? "搜索中" : job.kind === "lyrics" ? "补歌词" : "下载中"}</span>
-        <span className="mono">
-          {job.completed}/{job.total}
-        </span>
+        <button type="button" className="job-chip-open" onClick={open} title="查看进度">
+          <span>{job.kind === "search" ? "搜索中" : job.kind === "lyrics" ? "补歌词" : "下载中"}</span>
+          <span className="mono">
+            {job.completed}/{job.total}
+          </span>
+        </button>
         <button
-          className="link-btn"
-          onClick={(e) => {
-            e.stopPropagation();
+          type="button"
+          className="link-btn job-chip-stop"
+          onClick={() => {
             api
               .cancelJob(job.id)
               .then(upsertJob)
               .catch((err) => toast("bad", err.message));
           }}
-          onKeyDown={(e) => e.stopPropagation()}
         >
           停止
         </button>
       </div>
-      <div className="meter">
-        <span style={{ width: `${pct}%` }} />
-      </div>
-      {job.current && <div className="job-chip-current">{job.current}</div>}
+      <button type="button" className="job-chip-body" onClick={open} tabIndex={-1} aria-hidden="true">
+        <div className="meter">
+          <span style={{ width: `${pct}%` }} />
+        </div>
+        {job.current && <div className="job-chip-current">{job.current}</div>}
+      </button>
     </div>
   );
 }

@@ -95,26 +95,26 @@ export function ImportPage() {
 
       <section className="card import-input">
         {mode === "file" && (
-          <div
-            className={`drop${dragging ? " is-over" : ""}`}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragging(true);
-            }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragging(false);
-              pickFile(e.dataTransfer.files[0]);
-            }}
-            onClick={() => fileInput.current?.click()}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => e.key === "Enter" && fileInput.current?.click()}
-          >
-            <Upload size={26} aria-hidden />
-            <div className="drop-title">{file ? file.name : "把文件拖到这里，或点击选择"}</div>
-            <div className="muted small">.xlsx · .csv · .md · .txt</div>
+          <>
+            <button
+              type="button"
+              className={`drop${dragging ? " is-over" : ""}`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                pickFile(e.dataTransfer.files[0]);
+              }}
+              onClick={() => fileInput.current?.click()}
+            >
+              <Upload size={26} aria-hidden />
+              <div className="drop-title">{file ? file.name : "把文件拖到这里，或点击选择"}</div>
+              <div className="muted small">.xlsx · .csv · .md · .txt</div>
+            </button>
             <input
               ref={fileInput}
               type="file"
@@ -125,7 +125,7 @@ export function ImportPage() {
                 e.target.value = "";
               }}
             />
-          </div>
+          </>
         )}
 
         {mode === "text" && (

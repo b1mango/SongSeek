@@ -37,6 +37,7 @@ export function NowPlaying({
 }) {
   const [leaving, setLeaving] = useState(false);
   const root = useRef<HTMLDivElement | null>(null);
+  const seekRef = useRef<HTMLInputElement | null>(null);
 
   const close = () => {
     if (leaving) return;
@@ -44,16 +45,46 @@ export function NowPlaying({
     window.setTimeout(onClose, 380);
   };
 
-  // Lock the page underneath and take keyboard focus while open.
+  // Make #root inert, lock scrolling underneath, and take keyboard focus while open.
   useEffect(() => {
+    const appRoot = document.getElementById("root");
+    appRoot?.setAttribute("inert", "");
     document.documentElement.classList.add("np-open");
     const previous = document.activeElement as HTMLElement | null;
     root.current?.focus();
     return () => {
+      appRoot?.removeAttribute("inert");
       document.documentElement.classList.remove("np-open");
       previous?.focus?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (seekRef.current && document.activeElement !== seekRef.current) {
+      const p = length ? Math.min(100, (time / length) * 100) : 0;
+      seekRef.current.style.setProperty("--p", `${p}%`);
+      seekRef.current.value = String(Math.min(time, length || 1));
+    }
+  }, [time, length]);
+
+  useEffect(() => {
+    if (!playing || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let frame = 0;
+    const tick = () => {
+      const t = audio.currentTime;
+      const dur = isFinite(audio.duration) ? audio.duration : 0;
+      if (seekRef.current) {
+        const p = dur ? Math.min(100, (t / dur) * 100) : 0;
+        seekRef.current.style.setProperty("--p", `${p}%`);
+        if (document.activeElement !== seekRef.current) {
+          seekRef.current.value = String(Math.min(t, dur || 1));
+        }
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [audio, playing]);
 
   const closeRef = useRef(close);
   closeRef.current = close;
@@ -122,14 +153,20 @@ export function NowPlaying({
 
           <div className="np-progress">
             <input
+              ref={seekRef}
               className="np-seek"
               type="range"
               min={0}
               max={length || 1}
               step={0.1}
-              value={Math.min(time, length || 1)}
+              defaultValue={Math.min(time, length || 1)}
               style={{ "--p": `${pct}%` } as CSSProperties}
-              onChange={(e) => seek(Number(e.target.value))}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                const p = length ? Math.min(100, (next / length) * 100) : 0;
+                e.currentTarget.style.setProperty("--p", `${p}%`);
+                seek(next);
+              }}
               aria-label="进度"
               disabled={!!error}
             />
@@ -154,7 +191,7 @@ export function NowPlaying({
           </div>
         </section>
 
-        {hasLyrics && <BigLyrics lyrics={lyrics!} time={time} length={length} onSeek={seek} />}
+        {hasLyrics && <BigLyrics audio={audio} playing={playing} lyrics={lyrics!} time={time} length={length} onSeek={seek} />}
       </main>
 
       {lyrics?.source && <div className="np-source">歌词 · {lyrics.source}</div>}
@@ -201,7 +238,21 @@ function Volume({ audio }: { audio: HTMLAudioElement }) {
   );
 }
 
-function BigLyrics({ lyrics, time, length, onSeek }: { lyrics: Lyrics; time: number; length: number; onSeek: (t: number) => void }) {
+function BigLyrics({
+  audio,
+  playing,
+  lyrics,
+  time,
+  length,
+  onSeek,
+}: {
+  audio: HTMLAudioElement;
+  playing: boolean;
+  lyrics: Lyrics;
+  time: number;
+  length: number;
+  onSeek: (t: number) => void;
+}) {
   const box = useRef<HTMLDivElement | null>(null);
   const touched = useRef(0);
   const [browsing, setBrowsing] = useState(false);
@@ -210,13 +261,30 @@ function BigLyrics({ lyrics, time, length, onSeek }: { lyrics: Lyrics; time: num
 
   const active = synced ? activeIndex(lyrics.lines, time) : -1;
 
-  // How far through the current line we are, for the soft left-to-right sweep.
-  let sweep = 0;
-  if (active >= 0) {
-    const start = lyrics.lines[active].t;
-    const next = lyrics.lines.slice(active + 1).find((l) => l.t > start)?.t ?? Math.max(start + 4, length || start + 4);
-    sweep = Math.min(1, Math.max(0, (time + 0.15 - start) / Math.max(0.6, Math.min(next - start, 12))));
-  }
+  const computeSweep = (t: number, idx: number) => {
+    if (idx < 0) return 0;
+    const start = lyrics.lines[idx].t;
+    const next = lyrics.lines.slice(idx + 1).find((l) => l.t > start)?.t ?? Math.max(start + 4, length || start + 4);
+    return Math.min(1, Math.max(0, (t + 0.15 - start) / Math.max(0.6, Math.min(next - start, 12))));
+  };
+
+  const sweep = computeSweep(time, active);
+
+  // Update active line --sweep directly via DOM ref at 60fps while playing, zero React re-renders.
+  useEffect(() => {
+    if (!playing || !synced || active < 0 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let frame = 0;
+    const tick = () => {
+      const span = box.current?.querySelector<HTMLElement>(".np-line.is-active .np-line-text");
+      if (span) {
+        const s = computeSweep(audio.currentTime, active);
+        span.style.setProperty("--sweep", `${(s * 100).toFixed(1)}%`);
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  });
 
   useEffect(() => {
     const el = box.current;

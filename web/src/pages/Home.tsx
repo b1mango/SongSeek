@@ -10,7 +10,7 @@ export function HomePage() {
   if (playlists.length === 0) {
     return (
       <div className="page home-empty">
-        <h1 className="display">把一份歌单，变成一个文件夹。</h1>
+        <h1 className="display">把一份歌单，变成一个文件夹</h1>
         <p className="lede">导入清单或直接搜索。觅音会同时查多个音源、核对歌名、歌手、时长和版本，拿不准的交给你挑，确认后下载并校验每一个文件。</p>
         <ol className="steps">
           <li>

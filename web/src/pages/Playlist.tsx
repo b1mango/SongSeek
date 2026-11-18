@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   CircleAlert,
   Download,
@@ -16,7 +16,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { api, ApiError } from "../api";
-import { Flags, isTyping, LrcSwitch, LyricsTag, StatusBadge, toneOfScore, useLyricsDefault, useToast } from "../components";
+import { ConfirmDialog, Flags, isTyping, LrcSwitch, LyricsTag, StatusBadge, toneOfScore, useLyricsDefault, useToast } from "../components";
 import { fmtDuration } from "../format";
 import { PlayButton } from "../player";
 import { href, navigate, subscribeJobFocus } from "../router";
@@ -24,6 +24,35 @@ import { FlowLabel, RowFlow } from "../RowFlow";
 import { StatusBar, StatusFilters, matchesFilter, type Filter } from "../StatusStrip";
 import { getPlaylistRevision, isPlaylistDeleted, isTrackDeleted, onEvent, removePlaylist, removeTrack, upsertJob, upsertPlaylist, useStore } from "../store";
 import type { BatchAction, Playlist, Track, TrackStatus } from "../types";
+
+const EMPTY_SET = new Set<number>();
+const pendingBatches = new Map<number, { playlistId: number; ids: number[]; timer: number }>();
+const pendingListeners = new Set<() => void>();
+let pendingSnapshots = new Map<number, Set<number>>();
+
+function rebuildPendingSnapshots() {
+  const next = new Map<number, Set<number>>();
+  for (const batch of pendingBatches.values()) {
+    let set = next.get(batch.playlistId);
+    if (!set) {
+      set = new Set<number>();
+      next.set(batch.playlistId, set);
+    }
+    batch.ids.forEach((tid) => set!.add(tid));
+  }
+  pendingSnapshots = next;
+  pendingListeners.forEach((fn) => fn());
+}
+
+function usePendingTrackDeletes(playlistId: number): Set<number> {
+  return useSyncExternalStore(
+    (cb) => {
+      pendingListeners.add(cb);
+      return () => pendingListeners.delete(cb);
+    },
+    () => pendingSnapshots.get(playlistId) ?? EMPTY_SET,
+  );
+}
 
 export function PlaylistPage({ id }: { id: number }) {
   const toast = useToast();
@@ -36,6 +65,8 @@ export function PlaylistPage({ id }: { id: number }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const pendingDeleted = usePendingTrackDeletes(id);
   const anchor = useRef<number | null>(null);
 
   useEffect(() => {
@@ -121,13 +152,38 @@ export function PlaylistPage({ id }: { id: number }) {
     return () => clearTimeout(timer);
   }, [flash]);
 
-  const visible = useMemo(() => {
-    if (!tracks) return [];
-    const needle = q.trim().toLowerCase();
-    return tracks.filter((t) => matchesFilter(t.status, filter) && (!needle || `${t.title} ${t.artist} ${t.album}`.toLowerCase().includes(needle)));
-  }, [tracks, filter, q]);
+  const effectiveTracks = useMemo(() => {
+    if (!tracks) return null;
+    return pendingDeleted.size ? tracks.filter((t) => !pendingDeleted.has(t.id)) : tracks;
+  }, [tracks, pendingDeleted]);
 
-  if (!playlist || !tracks) {
+  const visible = useMemo(() => {
+    if (!effectiveTracks) return [];
+    const needle = q.trim().toLowerCase();
+    return effectiveTracks.filter((t) => matchesFilter(t.status, filter) && (!needle || `${t.title} ${t.artist} ${t.album}`.toLowerCase().includes(needle)));
+  }, [effectiveTracks, filter, q]);
+
+  const c = useMemo(() => {
+    if (!playlist || !effectiveTracks) return null;
+    if (!pendingDeleted.size) return playlist.counts;
+    const counts: Playlist["counts"] = {
+      total: effectiveTracks.length,
+      pending: 0,
+      searching: 0,
+      matched: 0,
+      needs_review: 0,
+      not_found: 0,
+      queued: 0,
+      downloading: 0,
+      done: 0,
+      failed: 0,
+      skipped: 0,
+    };
+    for (const t of effectiveTracks) counts[t.status] = (counts[t.status] ?? 0) + 1;
+    return counts;
+  }, [playlist, pendingDeleted.size, effectiveTracks]);
+
+  if (!playlist || !effectiveTracks || !c) {
     return (
       <div className="page center-fill">
         <LoaderCircle className="spin" size={22} />
@@ -135,8 +191,7 @@ export function PlaylistPage({ id }: { id: number }) {
     );
   }
 
-  const c = playlist.counts;
-  const selectedIds = [...selected].filter((sid) => tracks.some((t) => t.id === sid));
+  const selectedIds = [...selected].filter((sid) => effectiveTracks.some((t) => t.id === sid));
 
   async function run(label: string, fn: () => Promise<unknown>) {
     setBusy(label);
@@ -162,7 +217,7 @@ export function PlaylistPage({ id }: { id: number }) {
     });
   // One button for the whole list: reveals a selected downloaded song if any, else the first one (same folder).
   const openFolder = () => {
-    const target = tracks.find((t) => t.file && !t.file_missing && selected.has(t.id)) ?? tracks.find((t) => t.file && !t.file_missing);
+    const target = effectiveTracks.find((t) => t.file && !t.file_missing && selected.has(t.id)) ?? effectiveTracks.find((t) => t.file && !t.file_missing);
     if (target) api.reveal(target.id).catch((e) => toast("bad", e.message));
   };
   const fillLyrics = () =>
@@ -205,20 +260,44 @@ export function PlaylistPage({ id }: { id: number }) {
       requestAnimationFrame(() => document.querySelector(`[data-track="${added[0].id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
     });
 
-  // Deleting is per track on the server; busy tracks (searching / downloading) refuse and are reported.
+  // Optimistic removal with a 5s undo window (zero native confirm); busy tracks refuse cleanly.
   const removeTracks = (ids: number[]) => {
-    const names = ids.map((x) => tracks.find((t) => t.id === x)?.title).filter(Boolean);
-    const what = ids.length === 1 ? `「${names[0]}」` : `选中的 ${ids.length} 首歌`;
-    if (!confirm(`从清单中删除${what}？已下载的文件不会被删除。`)) return;
-    return run("delete", async () => {
-      const results = await Promise.allSettled(ids.map((x) => api.deleteTrack(x)));
-      const gone = new Set(ids.filter((_, i) => results[i].status === "fulfilled"));
+    const deletable = ids.filter((tid) => {
+      const t = effectiveTracks.find((x) => x.id === tid);
+      return t && !BUSY.includes(t.status);
+    });
+    if (!deletable.length) {
+      toast("info", "正在处理的歌曲暂时无法移除");
+      return;
+    }
+    const names = deletable.map((x) => effectiveTracks.find((t) => t.id === x)?.title).filter(Boolean);
+    const what = deletable.length === 1 ? `已从清单移除「${names[0]}」` : `已从清单移除 ${deletable.length} 首歌`;
+    setSelected((sel) => new Set([...sel].filter((x) => !deletable.includes(x))));
+
+    const batchId = Date.now() + Math.random();
+    const timer = window.setTimeout(async () => {
+      pendingBatches.delete(batchId);
+      rebuildPendingSnapshots();
+      const results = await Promise.allSettled(deletable.map((x) => api.deleteTrack(x)));
+      const gone = new Set(deletable.filter((_, i) => results[i].status === "fulfilled"));
       gone.forEach((trackId) => removeTrack({ id: trackId, playlist_id: id }));
-      setTracks((xs) => xs!.filter((x) => !gone.has(x.id)));
-      setSelected((sel) => new Set([...sel].filter((x) => !gone.has(x))));
+      setTracks((xs) => (xs ? xs.filter((x) => !gone.has(x.id)) : xs));
       const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
-      if (failed) toast("bad", `${ids.length - gone.size} 首没删掉：${(failed.reason as Error).message}`);
-      else toast("ok", `已删除 ${gone.size} 首`);
+      if (failed) toast("bad", `${deletable.length - gone.size} 首未移除：${(failed.reason as Error).message}`);
+    }, 5000);
+
+    pendingBatches.set(batchId, { playlistId: id, ids: deletable, timer });
+    rebuildPendingSnapshots();
+    toast("info", what, {
+      label: "撤销",
+      onClick: () => {
+        const entry = pendingBatches.get(batchId);
+        if (!entry) return;
+        window.clearTimeout(entry.timer);
+        pendingBatches.delete(batchId);
+        rebuildPendingSnapshots();
+        toast("ok", "已恢复移除的歌曲");
+      },
     });
   };
 
@@ -277,7 +356,7 @@ export function PlaylistPage({ id }: { id: number }) {
                 {busy === "lyrics" ? <LoaderCircle className="spin" size={16} /> : <ScrollText size={16} />} 补歌词
               </button>
             )}
-            {tracks.some((t) => t.file && !t.file_missing) && (
+            {effectiveTracks.some((t) => t.file && !t.file_missing) && (
               <button className="btn" onClick={openFolder} title="打开下载文件夹（勾选了歌曲时定位到该首）">
                 <FolderOpen size={16} /> 打开文件夹
               </button>
@@ -286,41 +365,34 @@ export function PlaylistPage({ id }: { id: number }) {
               <FileDown size={16} /> 导出结果
             </a>
             <button
+              type="button"
               className="icon-btn danger"
               aria-label="删除清单"
               title="删除清单（已下载的文件保留）"
-              onClick={() => {
-                if (!confirm(`删除清单「${playlist.name}」？已下载的文件不会被删除。`)) return;
-                run("delete", async () => {
-                  await api.deletePlaylist(id);
-                  removePlaylist(id);
-                  navigate({ page: "home" });
-                });
-              }}
+              onClick={() => setConfirmDeleteOpen(true)}
             >
               <Trash2 size={16} />
             </button>
           </div>
         </header>
         <StatusBar counts={c} />
+        <PlaylistActions
+          counts={c}
+          missing={effectiveTracks.filter((t) => t.file_missing && t.chosen_candidate_id != null).map((t) => t.id)}
+          searchFailed={effectiveTracks.filter((t) => t.status === "not_found" && t.search_failed).length}
+          onRedownload={(ids) => batch("redownload", ids)}
+          busy={busy}
+          onSearch={() => startSearch()}
+          onDownload={() => startDownload()}
+          onRetry={() => {
+            const ids = effectiveTracks.filter((t) => t.status === "failed").map((t) => t.id);
+            batch("retry", ids);
+          }}
+          reviewHref={href({ page: "review", id })}
+        />
       </div>
 
       {adding && <AddSongs busy={busy === "add"} onAdd={addSongs} onClose={() => setAdding(false)} />}
-
-      <NextSteps
-        counts={c}
-        missing={tracks.filter((t) => t.file_missing && t.chosen_candidate_id != null).map((t) => t.id)}
-        searchFailed={tracks.filter((t) => t.status === "not_found" && t.search_failed).length}
-        onRedownload={(ids) => batch("redownload", ids)}
-        busy={busy}
-        onSearch={() => startSearch()}
-        onDownload={() => startDownload()}
-        onRetry={() => {
-          const ids = tracks.filter((t) => t.status === "failed").map((t) => t.id);
-          batch("retry", ids); // the server queues the download itself
-        }}
-        reviewHref={href({ page: "review", id })}
-      />
 
       <div className="filter-bar">
         <StatusFilters counts={c} filter={filter} onFilter={setFilter} />
@@ -384,12 +456,25 @@ export function PlaylistPage({ id }: { id: number }) {
             ))}
           </tbody>
         </table>
-        {visible.length === 0 && <div className="empty-row muted">没有符合条件的歌曲</div>}
+        {visible.length === 0 && (
+          <div className="empty-row muted">
+            {c.total === 0 ? (
+              <div className="empty-state-inline">
+                <span>清单还是空的</span>
+                <button type="button" className="btn btn-sm" onClick={() => setAdding(true)}>
+                  <Plus size={14} /> 添加歌曲
+                </button>
+              </div>
+            ) : (
+              "没有符合条件的歌曲"
+            )}
+          </div>
+        )}
       </div>
 
       {selectedIds.length > 0 && (
         <BulkBar
-          picked={tracks.filter((t) => selected.has(t.id))}
+          picked={effectiveTracks.filter((t) => selected.has(t.id))}
           hidden={selectedIds.filter((x) => !visible.some((t) => t.id === x)).length}
           busy={busy}
           onBatch={batch}
@@ -399,6 +484,24 @@ export function PlaylistPage({ id }: { id: number }) {
           onClear={() => setSelected(new Set())}
         />
       )}
+
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        title={`删除清单「${playlist.name}」`}
+        description={`将移除这份清单中的 ${c.total} 首歌曲与匹配记录；已下载到本地文件夹的音频和歌词文件会保留。`}
+        confirmLabel="删除清单"
+        danger
+        busy={busy === "delete"}
+        onClose={() => setConfirmDeleteOpen(false)}
+        onConfirm={() => {
+          run("delete", async () => {
+            await api.deletePlaylist(id);
+            setConfirmDeleteOpen(false);
+            removePlaylist(id);
+            navigate({ page: "home" });
+          });
+        }}
+      />
     </div>
   );
 }
@@ -509,7 +612,7 @@ function BulkBar({
   );
 }
 
-function NextSteps({
+function PlaylistActions({
   counts: c,
   missing,
   searchFailed,
@@ -521,7 +624,6 @@ function NextSteps({
   reviewHref,
 }: {
   counts: Playlist["counts"];
-  /** done tracks whose file vanished from disk and can be fetched again */
   missing: number[];
   searchFailed: number;
   onRedownload: (ids: number[]) => void;
@@ -534,73 +636,76 @@ function NextSteps({
   const searchable = c.pending + c.not_found;
   const steps = [
     c.pending > 0 && (
-      <button key="s" className="step-btn" disabled={!!busy} onClick={onSearch}>
-        {busy === "search" ? <LoaderCircle className="spin" size={18} /> : <Search size={18} />}
-        <span>
-          <b>搜索 {searchable} 首</b>
-          <small>{c.not_found ? `含 ${c.not_found} 首上次未找到` : "查询全部启用的音源并自动匹配"}</small>
-        </span>
+      <button
+        key="s"
+        type="button"
+        className={`btn${c.matched === 0 && c.needs_review === 0 ? " btn-primary" : ""}`}
+        disabled={!!busy}
+        onClick={onSearch}
+        title={c.not_found ? `含 ${c.not_found} 首上次未找到` : "查询全部启用的音源并自动匹配"}
+      >
+        {busy === "search" ? <LoaderCircle className="spin" size={16} /> : <Search size={16} />}
+        搜索 {searchable} 首
       </button>
     ),
     c.needs_review > 0 && (
-      <a key="r" className="step-btn tone-warn" href={reviewHref}>
-        <ListChecks size={18} />
-        <span>
-          <b>审核 {c.needs_review} 首</b>
-          <small>候选拿不准，需要你挑一下</small>
-        </span>
+      <a key="r" className="btn tone-btn tone-warn" href={reviewHref} title="逐首对比并确认候选版本">
+        <ListChecks size={16} />
+        审核 {c.needs_review} 首
       </a>
     ),
     c.matched > 0 && (
-      <button key="d" className="step-btn tone-primary" disabled={!!busy} onClick={onDownload}>
-        {busy === "download" ? <LoaderCircle className="spin" size={18} /> : <Download size={18} />}
-        <span>
-          <b>下载 {c.matched} 首</b>
-          <small>已确认版本，下载后逐个校验</small>
-        </span>
+      <button key="d" type="button" className="btn btn-primary" disabled={!!busy} onClick={onDownload} title="下载已确认版本并逐首校验">
+        {busy === "download" ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}
+        下载 {c.matched} 首
       </button>
     ),
     c.failed > 0 && (
-      <button key="f" className="step-btn tone-bad" disabled={!!busy} onClick={onRetry}>
-        <RotateCcw size={18} />
-        <span>
-          <b>重试失败的 {c.failed} 首</b>
-          <small>再试一次；仍失败可点该行「候选」换一个</small>
-        </span>
+      <button key="f" type="button" className="btn tone-btn tone-bad" disabled={!!busy} onClick={onRetry} title="重试下载失败的曲目">
+        <RotateCcw size={16} />
+        重试失败 {c.failed} 首
       </button>
     ),
     missing.length > 0 && (
-      <button key="m" className="step-btn tone-warn" disabled={!!busy} onClick={() => onRedownload(missing)}>
-        <Download size={18} />
-        <span>
-          <b>重新下载丢失的 {missing.length} 首</b>
-          <small>文件被移走或删除了，按原来选定的版本再下一次</small>
-        </span>
+      <button
+        key="m"
+        type="button"
+        className="btn tone-btn tone-warn"
+        disabled={!!busy}
+        onClick={() => onRedownload(missing)}
+        title="本地文件已移走或删除，按原选定版本重新下载"
+      >
+        <Download size={16} />
+        重下丢失 {missing.length} 首
       </button>
     ),
     c.pending === 0 && c.not_found > 0 && (
-      <button key="n" className="step-btn tone-miss" disabled={!!busy} onClick={onSearch}>
-        <Search size={18} />
-        <span>
-          <b>重新搜索未找到的 {c.not_found} 首</b>
-          <small>
-            {searchFailed === c.not_found
-              ? "上次是音源连不上，检查网络或代理后再搜"
-              : searchFailed > 0
-                ? `其中 ${searchFailed} 首是音源连不上，不是没有这首歌`
-                : "也可以进审核页换关键词手动搜"}
-          </small>
-        </span>
+      <button
+        key="n"
+        type="button"
+        className="btn tone-btn tone-miss"
+        disabled={!!busy}
+        onClick={onSearch}
+        title={
+          searchFailed === c.not_found
+            ? "上次各音源未连通，检查网络或代理后重试"
+            : searchFailed > 0
+              ? `其中 ${searchFailed} 首为音源连接失败`
+              : "重新查询未找到的曲目，或进入审核页修改关键词"
+        }
+      >
+        <Search size={16} />
+        重搜未找到 {c.not_found} 首
       </button>
     ),
   ].filter(Boolean);
 
-  if (!steps.length) {
-    const allDone = c.total > 0 && c.done + c.skipped === c.total;
-    if (!c.total) return <div className="next-empty">清单还是空的，点右上角「添加歌曲」粘贴几首。</div>;
-    return <div className={`next-empty${allDone ? " is-done" : ""}`}>{allDone ? "这份清单已经全部处理完。" : "正在处理中，进度会实时更新。"}</div>;
-  }
-  return <div className="next-steps">{steps}</div>;
+  if (!steps.length) return null;
+  return (
+    <div className="pl-actions" role="region" aria-label="下一步操作">
+      {steps}
+    </div>
+  );
 }
 
 function TrackRow({
@@ -712,9 +817,13 @@ function TrackRow({
             size={28}
           />
         )}
-        {reviewable && !t.file && (
-          <a className="link-btn" href={href({ page: "review", id: t.playlist_id, track: t.id })}>
-            {t.candidate_count ? `候选 ${t.candidate_count}` : "换关键词搜"}
+        {reviewable && (
+          <a
+            className={`link-btn${t.file ? " row-swap" : ""}`}
+            href={href({ page: "review", id: t.playlist_id, track: t.id })}
+            title={t.file ? "查看候选并更换音频版本" : undefined}
+          >
+            {t.file ? "换版本" : t.candidate_count ? `候选 ${t.candidate_count}` : "换关键词搜"}
           </a>
         )}
         {t.status !== "searching" && t.status !== "queued" && t.status !== "downloading" && (

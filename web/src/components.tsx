@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
-import { Check, CircleHelp, X, CircleAlert, CircleCheck, Info } from "lucide-react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { Check, CircleHelp, X, CircleAlert, CircleCheck, Info, LoaderCircle } from "lucide-react";
 import { FLAG_LABEL, STATUS, fmtDelta, fmtDuration, tolerance, type Tone } from "./format";
 import { useStore } from "./store";
 import type { Candidate, CheckItem, LyricsInfo, TrackStatus, VersionFlag } from "./types";
@@ -149,23 +149,36 @@ export function DurationRuler({
   );
 }
 
-/* ---------------- toasts ---------------- */
+/* ---------------- toasts & confirm dialog ---------------- */
+
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
 
 interface Toast {
   id: number;
   tone: "ok" | "bad" | "info";
   text: string;
+  action?: ToastAction;
 }
-const ToastCtx = createContext<(tone: Toast["tone"], text: string) => void>(() => {});
+const ToastCtx = createContext<(tone: Toast["tone"], text: string, action?: ToastAction) => void>(() => {});
 export const useToast = () => useContext(ToastCtx);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<Toast[]>([]);
-  const push = useCallback((tone: Toast["tone"], text: string) => {
-    const id = Date.now() + Math.random();
-    setItems((xs) => [...xs.slice(-3), { id, tone, text }]);
-    setTimeout(() => setItems((xs) => xs.filter((x) => x.id !== id)), tone === "bad" ? 6000 : 3200);
+  const dismiss = useCallback((id: number) => {
+    setItems((xs) => xs.filter((x) => x.id !== id));
   }, []);
+  const push = useCallback(
+    (tone: Toast["tone"], text: string, action?: ToastAction) => {
+      const id = Date.now() + Math.random();
+      const ttl = action ? 5200 : tone === "bad" ? 6000 : 3200;
+      setItems((xs) => [...xs.slice(-3), { id, tone, text, action }]);
+      setTimeout(() => dismiss(id), ttl);
+    },
+    [dismiss],
+  );
   return (
     <ToastCtx.Provider value={push}>
       {children}
@@ -176,11 +189,84 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             <div key={t.id} className={`toast tone-${t.tone}`}>
               <Icon size={16} aria-hidden />
               <span>{t.text}</span>
+              {t.action && (
+                <button
+                  type="button"
+                  className="toast-action"
+                  onClick={() => {
+                    dismiss(t.id);
+                    t.action!.onClick();
+                  }}
+                >
+                  {t.action.label}
+                </button>
+              )}
             </div>
           );
         })}
       </div>
     </ToastCtx.Provider>
+  );
+}
+
+export function ConfirmDialog({
+  open,
+  title,
+  description,
+  confirmLabel,
+  danger = false,
+  busy = false,
+  onConfirm,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  description: string;
+  confirmLabel: string;
+  danger?: boolean;
+  busy?: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement | null>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (open) {
+      if (!el.open) el.showModal();
+    } else if (el.open) {
+      el.close();
+    }
+  }, [open]);
+
+  return (
+    <dialog
+      ref={ref}
+      className="confirm-dialog"
+      aria-labelledby="confirm-dialog-title"
+      onCancel={(e) => {
+        e.preventDefault();
+        if (!busy) onClose();
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !busy) onClose();
+      }}
+    >
+      <div className="confirm-dialog-body">
+        <h3 id="confirm-dialog-title">{title}</h3>
+        <p className="muted">{description}</p>
+        <div className="confirm-dialog-actions">
+          <button type="button" className="btn" disabled={busy} onClick={onClose}>
+            取消
+          </button>
+          <button type="button" className={`btn ${danger ? "btn-danger-solid" : "btn-primary"}`} disabled={busy} onClick={onConfirm}>
+            {busy && <LoaderCircle className="spin" size={15} />}
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </dialog>
   );
 }
 

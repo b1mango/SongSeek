@@ -1,0 +1,324 @@
+/* 觅音 SongSeek — "liner notes" palette: warm paper, record-black ink, vermilion label accent. */
+
+:root {
+  --paper: #f5f1e8;
+  --sleeve: #fffdf8;
+  --sleeve-2: #faf6ee;
+  --ink: #1d1a16;
+  --ink-2: #4a443b;
+  --ink-3: #847b6e;
+  --rule: #e6dfd1;
+  --rule-strong: #d3c9b6;
+  --label: #c8462b;
+  --label-ink: #fff8f2;
+  --label-soft: #f6e1d9;
+  --select: #ede6d8;
+
+  --ok: #2f7a4b;
+  --ok-soft: #e2efe5;
+  --warn: #a8670f;
+  --warn-soft: #f7ead2;
+  --bad: #b3322a;
+  --bad-soft: #f6dedb;
+  --info: #2d5f9a;
+  --info-soft: #dfe8f3;
+  --miss: #7a5aa6;
+  --miss-soft: #ece4f4;
+  /* Harmonized with --info so downloading row dot-matrix & 下载中 badge share one hue */
+  --flow: #2d5f9a;
+  --flow-soft: #dfe8f3;
+  --idle: #847b6e;
+  --idle-soft: #ece6da;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 1px 0 rgba(29, 26, 22, 0.04), 0 1px 3px rgba(29, 26, 22, 0.06);
+  --shadow-lift: 0 8px 28px rgba(29, 26, 22, 0.14);
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+
+  --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --font-display: "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif;
+  --font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --paper: #14120f;
+  --sleeve: #1c1915;
+  --sleeve-2: #221e19;
+  --ink: #efe9de;
+  --ink-2: #c4bcae;
+  --ink-3: #958b7b;
+  --rule: #2f2a23;
+  --rule-strong: #403930;
+  --label: #e0603f;
+  --label-ink: #1a0f0a;
+  --label-soft: #3a2119;
+  --select: #2b261f;
+  --ok: #6fbf8a;
+  --ok-soft: #1d2e22;
+  --warn: #e0a547;
+  --warn-soft: #33281a;
+  --bad: #ec7a6e;
+  --bad-soft: #3a1f1c;
+  --info: #7fa9de;
+  --info-soft: #1c2735;
+  --miss: #b59be2;
+  --miss-soft: #292234;
+  --flow: #7fa9de;
+  --flow-soft: #1c2735;
+  --idle: #958b7b;
+  --idle-soft: #26221d;
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
+  --shadow-lift: 0 10px 30px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html,
+body {
+  overflow-x: clip;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 14px/1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+h1 {
+  font-size: 24px;
+}
+
+h2 {
+  font-size: 16px;
+}
+
+p {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  touch-action: manipulation;
+}
+
+kbd {
+  font: 11px var(--font-mono);
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--rule-strong);
+  border-bottom-width: 2px;
+  background: var(--sleeve);
+  color: var(--ink-2);
+}
+
+:focus-visible {
+  outline: 2px solid var(--label);
+  outline-offset: 2px;
+}
+
+/* ---------- utilities & semantic tones ---------- */
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--ink-3);
+}
+
+.small {
+  font-size: 12px;
+}
+
+.strong {
+  font-weight: 500;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.wrap {
+  flex-wrap: wrap;
+}
+
+.between {
+  justify-content: space-between;
+}
+
+.end {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.gap-4 {
+  gap: 4px;
+}
+
+.gap-6 {
+  gap: 6px;
+}
+
+.gap-8 {
+  gap: 8px;
+}
+
+.gap-12 {
+  gap: 12px;
+}
+
+.gap-16 {
+  gap: 16px;
+}
+
+.pad {
+  padding: 16px;
+}
+
+.w-90 {
+  width: 90px;
+  flex: none;
+}
+
+.center-fill {
+  display: grid;
+  place-items: center;
+  min-height: 200px;
+  color: var(--ink-3);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.rot-180 {
+  transform: rotate(180deg);
+}
+
+.tone-ok {
+  --t: var(--ok);
+  --ts: var(--ok-soft);
+}
+
+.tone-warn {
+  --t: var(--warn);
+  --ts: var(--warn-soft);
+}
+
+.tone-bad {
+  --t: var(--bad);
+  --ts: var(--bad-soft);
+}
+
+.tone-info {
+  --t: var(--info);
+  --ts: var(--info-soft);
+}
+
+.tone-miss {
+  --t: var(--miss);
+  --ts: var(--miss-soft);
+}
+
+.tone-busy {
+  --t: var(--flow);
+  --ts: var(--flow-soft);
+}
+
+.tone-idle {
+  --t: var(--idle);
+  --ts: var(--idle-soft);
+}
+
+.tone-primary {
+  --t: var(--ink);
+  --ts: var(--sleeve);
+}
+
+.tone-text-ok {
+  color: var(--ok);
+}
+
+.tone-text-warn {
+  color: var(--warn);
+}
+
+.tone-text-bad {
+  color: var(--bad);
+}
+
+.tone-text-miss {
+  color: var(--miss);
+}
+
+.tone-text-idle {
+  color: var(--ink-3);
+}
+
+.page-enter {
+  animation: page-in 0.28s var(--ease-out) backwards;
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.fade-in {
+  animation: fade-in 0.24s var(--ease-out) both;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}

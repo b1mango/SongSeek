@@ -20,9 +20,9 @@ export function RowFlow({ trackId }: { trackId: number }) {
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let w = 0;
     let h = 0;
-    let dot = "#bd5230";
-    let wash = "#f9e1d4";
-    let clear = "rgba(235, 226, 251, 0)";
+    let dot = "#2d5f9a";
+    let wash = "#dfe8f3";
+    let clear = "rgba(223, 232, 243, 0)";
 
     const readColors = () => {
       const css = getComputedStyle(canvas);

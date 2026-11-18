@@ -277,11 +277,10 @@ export function ReviewPage({ id, focus }: { id: number; focus?: number }) {
         <ul className="queue-list">
           {queue.map((t) => (
             <li key={t.id}>
-              <div className={`queue-item${t.id === currentId ? " is-current" : ""} st-${t.status}`} onClick={() => select(t.id)}>
+              <div className={`queue-item${t.id === currentId ? " is-current" : ""} st-${t.status}`}>
                 <input
                   type="checkbox"
                   checked={checked.has(t.id)}
-                  onClick={(e) => e.stopPropagation()}
                   onChange={() =>
                     setChecked((s) => {
                       const n = new Set(s);
@@ -292,11 +291,18 @@ export function ReviewPage({ id, focus }: { id: number; focus?: number }) {
                   }
                   aria-label={`选择 ${t.title}`}
                 />
-                <div className="queue-text">
-                  <span className="queue-title">{t.title}</span>
-                  <span className="queue-artist">{t.artist || "未写歌手"}</span>
-                </div>
-                <QueueMark t={t} />
+                <button
+                  type="button"
+                  className="queue-select"
+                  aria-current={t.id === currentId ? "true" : undefined}
+                  onClick={() => select(t.id)}
+                >
+                  <div className="queue-text">
+                    <span className="queue-title">{t.title}</span>
+                    <span className="queue-artist">{t.artist || "未写歌手"}</span>
+                  </div>
+                  <QueueMark t={t} />
+                </button>
               </div>
             </li>
           ))}
